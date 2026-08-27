@@ -100,6 +100,16 @@ namespace LabSpill
         public int LiquidCount => m_liquids.Count;
         public Bounds SimulationBounds => m_domain;
 
+        // Contadores de diagnostico. Sem eles "parece igual" nao e' verificavel:
+        // o pool, o nascimento na GPU e a morte assincrona sao invisiveis por
+        // construcao, e a unica forma de saber se estao funcionando e medir.
+        public int Capacity => m_pool != null ? m_pool.Capacity : 0;
+        public int ColliderCount => m_colliders != null ? m_colliders.Count : 0;
+        public int PortCount => m_portCount;
+        public int SpawnedTotal { get; private set; }
+        public int DiedByAge { get; private set; }
+        public int DiedByCapture { get; private set; }
+
         void Start()
         {
             if (settings == null)
@@ -129,12 +139,9 @@ namespace LabSpill
             m_solver = new FluidSolver(m_pool, m_domain, m_spawnScratch.Length)
             {
                 Graveyard = m_graveyard,
-                SolverIterations = settings.solverIterations,
-                ConstraintIterations = settings.constraintIterations,
-                RestDamping = settings.restDamping,
-                Cohesion = settings.cohesion,
                 PortEntryDepth = settings.PhysicalRadius * 2f
             };
+            ApplyTunables();
 
             m_colliders = new SpillColliderProvider(settings.maxColliders);
             RefreshSceneCache();
@@ -160,6 +167,7 @@ namespace LabSpill
         {
             if (m_solver == null) return;
 
+            ApplyTunables();
             FlushSpawns();
             UploadPorts();
 
@@ -182,6 +190,21 @@ namespace LabSpill
         }
 
         void LateUpdate() => PublishSurfaces();
+
+        /// <summary>
+        /// Copia do asset os parametros que se calibram no olho. Roda todo passo de
+        /// proposito: lidos so uma vez no Start, calibrar coesao ou viscosidade exigia
+        /// sair do Play, mudar, voltar - e comparar de memoria, que e justamente como
+        /// nao se calibra nada.
+        /// </summary>
+        void ApplyTunables()
+        {
+            m_solver.SolverIterations = settings.solverIterations;
+            m_solver.ConstraintIterations = settings.constraintIterations;
+            m_solver.RestDamping = settings.restDamping;
+            m_solver.Cohesion = settings.cohesion;
+            m_pool.Viscosity = settings.viscosity;
+        }
 
         // ------------------------------------------------------------------ liquidos
 
@@ -274,6 +297,7 @@ namespace LabSpill
                     (uint)liquidIndex,
                     (uint)slot);
                 m_liveParticlesPerLiquid[liquidIndex]++;
+                SpawnedTotal++;
                 accepted++;
             }
 
@@ -367,8 +391,13 @@ namespace LabSpill
                 m_liveParticlesPerLiquid[(int)substance] =
                     Mathf.Max(0, m_liveParticlesPerLiquid[(int)substance] - 1);
 
-            if (portPlusOne == 0) return;
+            if (portPlusOne == 0)
+            {
+                DiedByAge++;
+                return;
+            }
 
+            DiedByCapture++;
             int portIndex = (int)portPlusOne - 1;
             if (portIndex < 0 || portIndex >= m_portCount) return;
 

@@ -7918,6 +7918,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1369733782}
   - component: {fileID: 1369733783}
+  - component: {fileID: 1369733790}
   m_Layer: 0
   m_Name: Spill Fluid World
   m_TagString: Untagged
@@ -11146,3 +11147,17 @@ SceneRoots:
   - {fileID: 321795523}
   - {fileID: 1255744681}
   - {fileID: 1377050832}
+--- !u!114 &1369733790
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1369733779}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c8d9e850c70c42ed8638cfbf2d53d39e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LabSpill.SpillFluidDebugHUD
+  show: 1
+  origin: {x: 12, y: 12}

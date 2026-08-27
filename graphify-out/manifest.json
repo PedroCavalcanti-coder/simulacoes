@@ -1,0 +1,197 @@
+{
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\FluidBodyDemo.cs": {
+    "mtime": 1783359772.9130926,
+    "ast_hash": "d6853d70aaaf6665c8da04b75036163c",
+    "semantic_hash": "d6853d70aaaf6665c8da04b75036163c"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\FluidFree.cs": {
+    "mtime": 1783690193.1443486,
+    "ast_hash": "42f2c80bb81a104fadd42bcc50acf60e",
+    "semantic_hash": "42f2c80bb81a104fadd42bcc50acf60e"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\FluidLabManager.cs": {
+    "mtime": 1783169236.4893692,
+    "ast_hash": "0ab60358befec99cf57f3578787dbd0b",
+    "semantic_hash": "0ab60358befec99cf57f3578787dbd0b"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\DesktopVRSimulator.cs": {
+    "mtime": 1784669072.2831025,
+    "ast_hash": "3e8e0d8b57304c73a7dc6f098d4185cf",
+    "semantic_hash": "3e8e0d8b57304c73a7dc6f098d4185cf"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\Editor\\ColliderDemoBuilder.cs": {
+    "mtime": 1784312433.2856252,
+    "ast_hash": "2a5f528c9646b285e5c5737572f92379",
+    "semantic_hash": "2a5f528c9646b285e5c5737572f92379"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\Editor\\FlaskFluidUIBuilder.cs": {
+    "mtime": 1784296128.6574478,
+    "ast_hash": "b0b56f6422afe9814ce73a8637fe8ee9",
+    "semantic_hash": "b0b56f6422afe9814ce73a8637fe8ee9"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\Faucet.cs": {
+    "mtime": 1783174321.6998632,
+    "ast_hash": "f881eb6eb028f9ac661faa3e1090671d",
+    "semantic_hash": "f881eb6eb028f9ac661faa3e1090671d"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FlaskFluidTest.cs": {
+    "mtime": 1784669884.2476227,
+    "ast_hash": "9cb390fff18e0d9c5726809fa1e4a4a7",
+    "semantic_hash": "9cb390fff18e0d9c5726809fa1e4a4a7"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FlaskFluidUI.cs": {
+    "mtime": 1784296063.9080646,
+    "ast_hash": "81cbb141c342007ad10f99b68e1f9781",
+    "semantic_hash": "81cbb141c342007ad10f99b68e1f9781"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FlaskSDF.cs": {
+    "mtime": 1784312222.9177814,
+    "ast_hash": "80c212c9a70468ba02f97c865eb4e84b",
+    "semantic_hash": "80c212c9a70468ba02f97c865eb4e84b"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FluidSpawnPoint.cs": {
+    "mtime": 1783556941.1743507,
+    "ast_hash": "c9ab58777be91cc7279d692ab2ebd905",
+    "semantic_hash": "c9ab58777be91cc7279d692ab2ebd905"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\GlasswareProfile.cs": {
+    "mtime": 1784312343.7844355,
+    "ast_hash": "c1cd2fe69cb806a1dcfa179efa011e4e",
+    "semantic_hash": "c1cd2fe69cb806a1dcfa179efa011e4e"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\LabConstants.cs": {
+    "mtime": 1783099232.3370018,
+    "ast_hash": "fecf435109b227199e71be0f62822963",
+    "semantic_hash": "fecf435109b227199e71be0f62822963"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\LabController.cs": {
+    "mtime": 1783556926.476324,
+    "ast_hash": "b5bdb811f087374801ae1b901bb1bde4",
+    "semantic_hash": "b5bdb811f087374801ae1b901bb1bde4"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\LabPanel.cs": {
+    "mtime": 1783556950.5548725,
+    "ast_hash": "80c5c6483a0b2aaa3fdecbdb0f33dc7e",
+    "semantic_hash": "80c5c6483a0b2aaa3fdecbdb0f33dc7e"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\BitonicSort.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "800fdeb80527cf40f21868143251ba5f",
+    "semantic_hash": "800fdeb80527cf40f21868143251ba5f"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\CBUtility.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "484892cce60f4ec335ec2cc63793e71b",
+    "semantic_hash": "484892cce60f4ec335ec2cc63793e71b"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\DrawLines.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "10ec85038517a2e908cedb8f6a005754",
+    "semantic_hash": "10ec85038517a2e908cedb8f6a005754"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\FluidBody.cs": {
+    "mtime": 1784669819.7152002,
+    "ast_hash": "242a0fb41148068d5682f2390a8cf9b9",
+    "semantic_hash": "242a0fb41148068d5682f2390a8cf9b9"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\FluidBoundary.cs": {
+    "mtime": 1783690120.119053,
+    "ast_hash": "51e30a4ca2e342d69d13d896a4a43243",
+    "semantic_hash": "51e30a4ca2e342d69d13d896a4a43243"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\FluidFlask.cs": {
+    "mtime": 1783359766.138022,
+    "ast_hash": "c47efe5f571812f5130488edfb9c49e5",
+    "semantic_hash": "c47efe5f571812f5130488edfb9c49e5"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\FluidSolver.cs": {
+    "mtime": 1784299818.179734,
+    "ast_hash": "839c46b8f798168db098f028ef4f98a4",
+    "semantic_hash": "839c46b8f798168db098f028ef4f98a4"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\FreeCam.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "866a0891e9741c97b8fe3e097a11ea96",
+    "semantic_hash": "866a0891e9741c97b8fe3e097a11ea96"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\GridHash.cs": {
+    "mtime": 1784246454.4329348,
+    "ast_hash": "8129a75938b95418976a75c235bf6c04",
+    "semantic_hash": "8129a75938b95418976a75c235bf6c04"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\PBDFluidPanel.cs": {
+    "mtime": 1783562259.377891,
+    "ast_hash": "a597c4083ea265d2a2b6fac5a48d163c",
+    "semantic_hash": "a597c4083ea265d2a2b6fac5a48d163c"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\ParticleSource.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "f33dcd7d1023c7a02bf8cd32cc6f6dc7",
+    "semantic_hash": "f33dcd7d1023c7a02bf8cd32cc6f6dc7"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\ParticlesFromBounds.cs": {
+    "mtime": 1643550423.0,
+    "ast_hash": "e93935ab1a66631dacf50b62d6b86e20",
+    "semantic_hash": "e93935ab1a66631dacf50b62d6b86e20"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\ParticlesFromList.cs": {
+    "mtime": 1782748832.146494,
+    "ast_hash": "80be885cad553d6874054e550d46c700",
+    "semantic_hash": "80be885cad553d6874054e550d46c700"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\RenderVolume.cs": {
+    "mtime": 1783560672.3535862,
+    "ast_hash": "05c03ccd1bd8a5324aa63a49bda9f798",
+    "semantic_hash": "05c03ccd1bd8a5324aa63a49bda9f798"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\Render\\FluidRenderBridge.cs": {
+    "mtime": 1784669863.317679,
+    "ast_hash": "a8228fe18f5a33122a09c6f21eb4e327",
+    "semantic_hash": "a8228fe18f5a33122a09c6f21eb4e327"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\Render\\FluidRenderFeature.cs": {
+    "mtime": 1783629901.2062438,
+    "ast_hash": "620637a2daf83974e1d8f113460e710c",
+    "semantic_hash": "620637a2daf83974e1d8f113460e710c"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\Render\\PBDFluidSSF.cs": {
+    "mtime": 1784669900.1653166,
+    "ast_hash": "f7405f80dc37c55883b7de1d0ec96825",
+    "semantic_hash": "f7405f80dc37c55883b7de1d0ec96825"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Scripts\\SmoothingKernel.cs": {
+    "mtime": 1784249873.5149975,
+    "ast_hash": "b4b63940afab81be2923d16d51c2ac1d",
+    "semantic_hash": "b4b63940afab81be2923d16d51c2ac1d"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FLASK_LAB_PLAN.md": {
+    "mtime": 1784671215.6532013,
+    "ast_hash": "80f2b8b7a6b4d2fbe27c5e1b0587b225",
+    "semantic_hash": "80f2b8b7a6b4d2fbe27c5e1b0587b225"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\Editor\\FluidPlaygroundBuilder.cs": {
+    "mtime": 1784670767.9463363,
+    "ast_hash": "417df7c77753771c12cad5b63cdc458b",
+    "semantic_hash": "417df7c77753771c12cad5b63cdc458b"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FluidLiquidDefinition.cs": {
+    "mtime": 1784669827.2528682,
+    "ast_hash": "bb3731579bef25a5e6a78253300d5f7c",
+    "semantic_hash": "bb3731579bef25a5e6a78253300d5f7c"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FluidMultiSurfacePublisher.cs": {
+    "mtime": 1784670767.9421976,
+    "ast_hash": "564d3dca15812016e446736ada1793be",
+    "semantic_hash": "564d3dca15812016e446736ada1793be"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\FluidPlaygroundController.cs": {
+    "mtime": 1784670420.0261776,
+    "ast_hash": "0870d066280e49b9e60739c665bcfe1b",
+    "semantic_hash": "0870d066280e49b9e60739c665bcfe1b"
+  },
+  "C:\\Users\\pedro\\simulacoes\\Assets\\PBDFluid\\Lab\\PlaygroundFaucet.cs": {
+    "mtime": 1784669996.0276926,
+    "ast_hash": "31a4d569f4fa25a5c98d84397ebd3496",
+    "semantic_hash": "31a4d569f4fa25a5c98d84397ebd3496"
+  }
+}

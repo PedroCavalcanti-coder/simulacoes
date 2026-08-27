@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d5a974c6335d8834490d302eb0dc104c, type: 3}
+  m_Name: SpillVisualSettings
+  m_EditorClassIdentifier: Assembly-CSharp::LabSpill.SpillVisualSettings
+  millilitersPerParticle: 0.5
+  maxParticles: 6000
+  visualRadiusScale: 4
+  resolutionScale: 0.5
+  blurRadius: 3.2
+  blurIterations: 1
+  normalRadius: 1.5
+  depthFalloff: 0.45
+  surfaceTension: 0.55
+  edgeSoftness: 2.2
+  densityThreshold: 0.01
+  solverIterations: 1
+  constraintIterations: 1
+  maxPhysicsStepsPerFrame: 1
+  viscosity: 0.01
+  massScale: 1
+  restDamping: 2
+  maxParticlesPerFrame: 32
+  emissionFlushInterval: 0.025
+  benchLifetimeMin: 10
+  benchLifetimeMax: 30

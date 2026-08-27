@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 2f8e47bba51c5c742bb59c77db0313fd
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 173635
+  packageName: Liquid Shader
+  packageVersion: 1.1.0
+  assetPath: Assets/Liquid Shader/Example/Materials/Capsule Glass.mat
+  uploadId: 436568

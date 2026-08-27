@@ -1,0 +1,13 @@
+[mcp_servers.UnityMCP]
+command = 'C:\Users\pedro\.local\bin\uvx.exe'
+args = [
+    "--from",
+    "mcpforunityserver==10.1.0",
+    "mcp-for-unity",
+]
+
+[mcp_servers.UnityMCP.tools.manage_scene]
+approval_mode = "approve"
+
+[mcp_servers.UnityMCP.tools.read_console]
+approval_mode = "approve"

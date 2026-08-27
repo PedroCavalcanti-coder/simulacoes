@@ -1,0 +1,20 @@
+{
+  "liquidName": "Alcool",
+  "category": "polar",
+  "densityKgPerLiter": 0.789,
+  "viscosity": 1.2,
+  "boilingPointC": 78.37,
+  "surfaceColor": { "r": 0.96, "g": 0.48, "b": 1.0, "a": 0.78 },
+  "bodyColor": { "r": 0.58, "g": 0.10, "b": 0.78, "a": 0.54 },
+  "deepColor": { "r": 0.20, "g": 0.025, "b": 0.38, "a": 1.0 },
+  "absorptionColor": { "r": 0.86, "g": 0.40, "b": 0.96, "a": 1.0 },
+  "emissionColor": { "r": 0.88, "g": 0.08, "b": 1.0, "a": 1.0 },
+  "absorptionDensity": 1.0,
+  "transparency": 0.76,
+  "lightTransmission": 0.92,
+  "surfaceOpacity": 0.52,
+  "turbidity": 0.04,
+  "smoothness": 0.92,
+  "indexOfRefraction": 1.361,
+  "emissionStrength": 0.8
+}

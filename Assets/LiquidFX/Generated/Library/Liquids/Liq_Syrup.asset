@@ -1,0 +1,23 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 2f72cfd10db290d49a68fa0392227491, type: 3}
+  m_Name: Liq_Syrup
+  m_EditorClassIdentifier: Assembly-CSharp::LiquidFX.LiquidDefinition
+  displayName: Syrup
+  category: {fileID: 11400000, guid: 864ef709825746b42b111377ffd330e2, type: 2}
+  color: {r: 0.75, g: 0.15, b: 0.35, a: 0.75}
+  murkColor: {r: 0, g: 0, b: 0, a: 1}
+  murkiness: 0.12
+  scale: 0.12
+  viscosity: 1
+  bubblesOpacity: 0.5
+  adjustmentSpeed: 1

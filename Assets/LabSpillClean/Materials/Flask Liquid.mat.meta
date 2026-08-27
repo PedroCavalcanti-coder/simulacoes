@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 069c2b97227bfd34f97ffe23a66b171f
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 173635
+  packageName: Liquid Shader
+  packageVersion: 1.1.0
+  assetPath: Assets/Liquid Shader/Example/Materials/Flask Liquid.mat
+  uploadId: 436568

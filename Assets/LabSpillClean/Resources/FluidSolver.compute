@@ -1,0 +1,894 @@
+﻿
+
+float HashScale;
+float3 HashSize;
+float3 HashTranslate;
+
+RWStructuredBuffer<int2> IndexMap;
+RWStructuredBuffer<int2> Table;
+
+int3 HashIndex(float3 p)
+{
+	p = (p - HashTranslate) * HashScale;
+	return clamp(p, 0, HashSize - 1);
+}
+
+float KernelRadius;
+float KernelRadius2;
+
+float Poly6Zero;
+float Poly6;
+float SpikyGrad;
+float ViscLap;
+
+float Pow2(float v)
+{
+	return v * v;
+}
+
+float Pow3(float v)
+{
+	return v * v * v;
+}
+
+float Poly6Kernel(float len2)
+{
+	return Poly6 * Pow3(KernelRadius2 - len2);
+}
+
+float3 SpikyGradKernel(float3 p, float len2)
+{
+	// r clampado: 2 particulas coincidentes (len2~0) davam p/r = 0/0 = NaN. Sob compressao
+	// (fluido contido no fundo) particulas se sobrepoem -> NaN e propaga. max(r,eps) mata isso.
+	float r = max(sqrt(len2), 1e-5);
+	return (p / r) * SpikyGrad * Pow2(KernelRadius - r);
+}
+
+float ViscLapKernel(float len2)
+{
+	float r = sqrt(len2);
+	return ViscLap * (KernelRadius - r);
+}
+
+#define THREADS 128
+#define PI 3.14159265359
+
+RWStructuredBuffer<float4> Positions;
+StructuredBuffer<float4> PredictedREAD;
+RWStructuredBuffer<float4> PredictedWRITE;
+StructuredBuffer<float4> VelocitiesREAD;
+RWStructuredBuffer<float4> VelocitiesWRITE;
+RWStructuredBuffer<float> Densities;
+RWStructuredBuffer<float> Pressures;
+
+// Estado por particula: 0 = viva, 1 = morta (despawnada, estacionada no cemiterio).
+// SEM "congelar por assentamento" (hack removido) — fisica sempre integra vivas.
+RWStructuredBuffer<float> States;
+float DespawnSpeed;   // fora de frasco + mais lenta que isso -> conta p/ despawn
+float3 Graveyard;     // destino das particulas mortas (fora da vista) — usado por varios passes
+
+// limites anti-"pipoca" (estabilidade PBF). CFL/clamps sao invariantes de escala:
+// bounded o estrago mesmo se Relaxation estiver mal calibrado.
+float MaxSpeed;       // vel max por substep (CFL) = CFL * cellSize / dt
+float MaxCorrection;  // correcao max de posicao por iteracao de densidade (~0.4*raio)
+float Relaxation;     // epsilon CFM no denominador de lambda (era hardcoded 60)
+
+// AMORTECIMENTO ADAPTATIVO p/ REPOUSO (dissipacao viscosa: KE -> calor).
+// Liquido real PARA com o tempo e so se move quando algo o move (Newton). PBF puro
+// nunca dissipa a energia residual do solver -> agitacao perpetua. Aqui: amortecimento
+// FORTE em baixa velocidade (assenta rapido e fica em repouso) e FRACO em alta (jato/
+// derrame continua vivo). Interpola por velocidade:
+//   damp = lerp(RestDamping, MoveDamping, saturate(speed / DampRefSpeed))
+//   v *= (1 - damp*dt)
+float RestDamping;   // 1/s em repouso (alto = assenta rapido). ~6
+float MoveDamping;   // 1/s em movimento rapido (baixo = jato vivo). ~0.2
+float DampRefSpeed;  // vel (m/s) onde ja e' "rapido" (usa MoveDamping). ~0.35
+
+StructuredBuffer<float4> Boundary;
+
+float3 Gravity;
+float Dampning;
+float DeltaTime;
+float Density;
+float Viscosity;
+float ParticleMass;
+int NumParticles;
+
+bool IsDead(int id) { return States[id] > 0.5; }
+
+// ============================================================================
+//  FRASCOS analiticos (laboratorio): casca topo-aberto que SEGUE o Transform.
+//  Mantem o fluido dentro; inclinar/mover = derramar. type 0=cilindro 1=caixa.
+//  center+axis+scale = base do frasco (mundo). halfExt: cil(x=raio, y=meia-altura);
+//  caixa(meias-extensoes). thick = espessura da parede.
+// ============================================================================
+// sem matrizes -> base (center/axis/scale). Perfil de revolucao R(y) (lathe):
+// cobre bequer/erlenmeyer/proveta/pipeta/funil. Topo aberto.
+struct Glassware
+{
+    float3 center;
+    float3 axisX;
+    float3 axisY;
+    float3 axisZ;
+    float3 scale;        // lossyScale (mundo por unidade local)
+    float wallThickness; // local
+    int profileStart;    // indice inicial em GlassProfile
+    int profileCount;    // nº de pontos
+    float pad0;
+};
+StructuredBuffer<Glassware> Glasswares;
+StructuredBuffer<float2> GlassProfile;   // (y_local, raio_local), y crescente
+int GlasswareCount;
+// deslocamento MAXIMO que a parede pode impor por passo (mundo). Faz o vidro empurrar
+// SUAVE (nao teleporta): frasco parado -> correcoes minusculas cabem; frasco movendo
+// rapido -> fluido fica p/ tras (INDEPENDENTE, verte), sem pico de velocidade ("enlouquece").
+float GlassMaxStep;
+
+float ProfileRadius(int s, int n, float y)
+{
+    float y0 = GlassProfile[s].x;
+    float yN = GlassProfile[s + n - 1].x;
+    float radius = GlassProfile[s + n - 1].y;
+    if (y <= y0) radius = GlassProfile[s].y;
+    else if (y < yN)
+    {
+        [loop] for (int i = 0; i < n - 1; i++)
+        {
+            float2 a = GlassProfile[s + i];
+            float2 b = GlassProfile[s + i + 1];
+            if (y >= a.x && y <= b.x)
+            {
+                float t = (y - a.x) / max(b.x - a.x, 1e-6);
+                radius = lerp(a.y, b.y, t);
+                break;
+            }
+        }
+    }
+    return radius;
+}
+
+// distancia ao VIDRO solido (negativo = dentro do vidro). Casca topo-aberto.
+float GlasswareDist(Glassware g, float3 lp)
+{
+    int s = g.profileStart, n = g.profileCount;
+    float t = max(g.wallThickness, 1e-4);
+    float r = length(lp.xz), y = lp.y;
+    float y0 = GlassProfile[s].x;
+    float yN = GlassProfile[s + n - 1].x;
+    float R = ProfileRadius(s, n, y);
+    // parede lateral: casca [R, R+t], y em [y0, yN]
+    float2 ds = float2(abs(r - (R + t * 0.5)) - t * 0.5, abs(y - (y0 + yN) * 0.5) - (yN - y0) * 0.5);
+    float sdSide = min(max(ds.x, ds.y), 0.0) + length(max(ds, 0.0));
+    // fundo: disco r em [0, R0+t], y em [y0-t, y0]
+    // NOTA: fundo fino (t~0.003) => particula lenta (~0.008/passo) TUNELA e escapa. Tentativas
+    // de engrossar (plug semi-infinito e disco tb=KernelRadius) deram NaN no resolve — precisa
+    // SDF/CCD mais robusto. Ver FLASK_LAB_PLAN.md "containment". Explosao (viscosidade) ja resolvida.
+    float R0 = GlassProfile[s].y;
+    float2 db = float2(abs(r - (R0 + t) * 0.5) - (R0 + t) * 0.5, abs(y - (y0 - t * 0.5)) - t * 0.5);
+    float sdBot = min(max(db.x, db.y), 0.0) + length(max(db, 0.0));
+    return min(sdSide, sdBot);
+}
+
+// ============================================================================
+//  FRASCOS por SDF (mesh de QUALQUER complexidade). SDF voxelizado do mesh do
+//  frasco (bake no CPU, FlaskSDF.cs), amostrado de um ATLAS 3D. Espaco LOCAL do
+//  mesh; a base center/axis/scale segue o Transform (inclinar = derramar).
+//  Convencao: sdf < 0 dentro do VIDRO solido; > 0 na cavidade/fora.
+// ============================================================================
+struct FlaskSDFData
+{
+    float3 center;   // mundo
+    float3 axisX;    // base (mundo)
+    float3 axisY;
+    float3 axisZ;
+    float3 scale;    // lossyScale
+    float3 bmin;     // bounds locais do SDF
+    float3 bsize;
+    float3 uvwMin;   // regiao no atlas
+    float3 uvwSize;
+    float3 halfTexel;// meio-texel (regiao-local) p/ clamp anti-bleed
+    float clearance; // raio da particula em unidades locais (+ meio voxel)
+    float eps;       // 1 voxel local (p/ gradiente)
+    float pad0; float pad1;
+};
+StructuredBuffer<FlaskSDFData> SDFFlasks;
+int SDFFlaskCount;
+Texture3D<float> SDFAtlas;
+SamplerState linearClampSampler;
+
+float SampleFlaskSDF(FlaskSDFData f, float3 lp)
+{
+    float3 uvw = (lp - f.bmin) / max(f.bsize, 1e-6);
+    uvw = clamp(uvw, f.halfTexel, 1.0 - f.halfTexel);
+    uvw = f.uvwMin + uvw * f.uvwSize;
+    return SDFAtlas.SampleLevel(linearClampSampler, uvw, 0);
+}
+
+// empurra a particula p/ fora do vidro do frasco SDF (espaco local)
+float3 FlaskSDFResolve(FlaskSDFData f, float3 lp)
+{
+    // fora dos bounds do SDF = livre
+    if (any(lp < f.bmin) || any(lp > f.bmin + f.bsize)) return lp;
+
+    float sd = SampleFlaskSDF(f, lp);
+    if (sd >= f.clearance) return lp;
+
+    float e = max(f.eps, 1e-5);
+    float dx = SampleFlaskSDF(f, lp + float3(e, 0, 0)) - SampleFlaskSDF(f, lp - float3(e, 0, 0));
+    float dy = SampleFlaskSDF(f, lp + float3(0, e, 0)) - SampleFlaskSDF(f, lp - float3(0, e, 0));
+    float dz = SampleFlaskSDF(f, lp + float3(0, 0, e)) - SampleFlaskSDF(f, lp - float3(0, 0, e));
+    float3 n = float3(dx, dy, dz);
+    float l = length(n);
+    if (l < 1e-6) return lp;
+    n /= l;
+    return lp + n * (f.clearance - sd);
+}
+
+// Contem a particula na CAVIDADE do frasco (espaco local). Topo ABERTO (verte).
+// Modelo de CAVIDADE (nao casca fina): solido semi-infinito FORA da cavidade -> clamp
+// direto de posicao (sem gradiente/diferencas finitas => sem NaN, sem tunelamento).
+//   - lateral: dentro da altura [y0,yN], r nunca passa do raio interno Rin(y)=R(y)-t.
+//   - fundo:   dentro do raio, y nunca abaixo do fundo interno y0.
+//   - topo:    y > yN livre (permite verter pela boca).
+bool GlasswareContains(Glassware g, float3 lp)
+{
+    int s = g.profileStart, n = g.profileCount;
+    float y0 = GlassProfile[s].x;
+    float yN = GlassProfile[s + n - 1].x;
+    if (lp.y < y0 || lp.y > yN) return false;
+
+    float t = max(g.wallThickness, 1e-4);
+    float Rin = max(ProfileRadius(s, n, lp.y) - t, 1e-4);
+    return length(lp.xz) <= Rin;
+}
+
+float3 GlasswareResolve(Glassware g, float3 previousLp, float3 lp)
+{
+    int s = g.profileStart, n = g.profileCount;
+    float t  = max(g.wallThickness, 1e-4);
+    float y0 = GlassProfile[s].x;
+    float yN = GlassProfile[s + n - 1].x;
+    float R0cap = GlassProfile[s].y;   // raio EXTERNO de captura do fundo
+
+    float mouthRadius = max(ProfileRadius(s, n, yN) - t, 1e-4);
+    bool crossedOpenTop = previousLp.y > yN && lp.y <= yN &&
+                          lp.y >= y0 && length(lp.xz) <= mouthRadius;
+
+    // Um frasco so pode conter quem ja estava na cavidade ou entrou pela boca.
+    // Antes, todo ponto abaixo do topo era radialmente clampado para DENTRO de
+    // cada frasco da cena, o que puxava liquidos externos para o chao/fundo.
+    if (!GlasswareContains(g, previousLp) && !crossedOpenTop) return lp;
+
+    // 1) LATERAL primeiro, p/ TODO y <= yN (inclui abaixo de y0): clampa raio ao interno.
+    //    Assim uma particula rapida que mergulha abaixo do fundo tem o raio trazido p/
+    //    dentro ANTES do teste do fundo -> nao escapa pelo canto (antes vazavam ~2).
+    if (lp.y <= yN)
+    {
+        float Rin = max(ProfileRadius(s, n, lp.y) - t, 1e-4);
+        float r = length(lp.xz);
+        if (r > Rin && r > 1e-6)
+        {
+            float2 dir = lp.xz / r;
+            lp.x = dir.x * Rin;
+            lp.z = dir.y * Rin;
+        }
+    }
+
+    // 2) FUNDO: com o raio ja dentro de R0cap, sobe p/ y0 se afundou. Topo (y>yN) livre = verte.
+    if (lp.y < y0 && length(lp.xz) < R0cap) lp.y = y0;
+    return lp;
+}
+
+float3 Velocity(int i)
+{
+
+	float3 velocity = VelocitiesREAD[i].xyz;
+	velocity -= velocity * Dampning * DeltaTime;
+	velocity += DeltaTime * Gravity;
+
+	return velocity;
+}
+
+float3 PredictedPosition(int i, float3 velocity)
+{
+	return Positions[i].xyz + DeltaTime * velocity;
+}
+
+#pragma kernel PredictPositions
+
+[numthreads(THREADS,1,1)]
+void PredictPositions(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id))
+		{
+			VelocitiesWRITE[id] = float4(0, 0, 0, 0);
+			PredictedWRITE[id] = Positions[id];   // morta: estacionada
+			return;
+		}
+
+		float3 velocity = Velocity(id);
+		float3 predicted = PredictedPosition(id, velocity);
+
+		VelocitiesWRITE[id] = float4(velocity, 0);
+		PredictedWRITE[id] = float4(predicted, 0);
+	}
+
+}
+
+float Distance2(float3 a, float3 b)
+{
+	float3 ab = a - b;
+	return dot(ab,ab);
+}
+
+float Length2(float3 p)
+{
+	return dot(p, p);
+}
+
+#define LOOP_START \
+[unroll] \
+for (int k = -1; k <= 1; k++) \
+{ \
+[unroll] \
+for (int j = -1; j <= 1; j++) \
+{ \
+[unroll] \
+for (int i = -1; i <= 1; i++) \
+{ \
+
+#define LOOP_END \
+} } } \
+
+void ComputeDensityAndPressure(int id, float3 pi, out float density, out float pressure)
+{
+
+	float InvDensity = 1.0f / Density;
+	float MassMulInvDensity = ParticleMass * InvDensity;
+
+	density = ParticleMass * Poly6Zero;
+	pressure = 0;
+
+	float sum_grad_C2 = 0.0f;
+	float3 gradC_i = 0.0f;
+
+	int3 hashIndex = HashIndex(pi);
+	int3 size = HashSize;
+	int sizexy = size.x * size.y;
+
+	LOOP_START
+
+	int xi = hashIndex.x + i;
+	int yj = hashIndex.y + j;
+	int zk = hashIndex.z + k;
+
+	if (xi < 0 || xi >= size.x) continue;
+	if (yj < 0 || yj >= size.y) continue;
+	if (zk < 0 || zk >= size.z) continue;
+
+	int hash = xi + yj * size.x + zk * sizexy;
+	int2 bounds = Table[hash];
+
+	for (int idx = bounds.x; idx <= bounds.y; idx++)
+	{
+		int n = IndexMap[idx].y;
+		if (n == id) continue;
+
+		float dist2;
+		float3 diff;
+		float psi = 0.0f;
+		if (n < NumParticles)
+		{
+			diff = pi - PredictedREAD[n].xyz;
+			dist2 = Length2(diff);
+		}
+		else
+		{
+			int m = n - NumParticles;
+			float4 b = Boundary[m];
+			diff = pi - b.xyz;
+			psi = b.w;
+			dist2 = Length2(diff);
+		}
+
+		if (dist2 >= KernelRadius2) continue;
+
+		if (n < NumParticles)
+		{
+			density += ParticleMass * Poly6Kernel(dist2);
+			float3 gradC_j = -MassMulInvDensity * SpikyGradKernel(diff, dist2);
+			sum_grad_C2 += dot(gradC_j, gradC_j);
+			gradC_i -= gradC_j;
+		}
+		else
+		{
+			density += psi * Poly6Kernel(dist2);
+			float3 gradC_j = -psi * InvDensity * SpikyGradKernel(diff, dist2);
+			sum_grad_C2 += Length2(gradC_j);
+			gradC_i -= gradC_j;
+		}
+	}
+
+	LOOP_END
+
+	float C = density * InvDensity - 1.0f;
+
+	if (C > 0)
+	{
+		// C > 0 for 60% - 65% of particles
+		sum_grad_C2 += Length2(gradC_i);
+	
+		//Relaxation (CFM) estabiliza a pressao com gradiente que some nas
+		//bordas do kernel. Agora e' uniform (Relaxation), calibravel no painel.
+		pressure = -C / (sum_grad_C2 + Relaxation);
+	}
+
+}
+
+#pragma kernel ComputeDensity
+
+[numthreads(THREADS, 1, 1)]
+void ComputeDensity(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		float3 pi = PredictedREAD[id].xyz;
+
+		float density, pressure;
+		ComputeDensityAndPressure(id, pi, density, pressure);
+
+		Densities[id] = density;
+		Pressures[id] = pressure;
+
+	}
+}
+
+float3 SolveDensity(int id, float3 pi, float pressure)
+{
+
+	float3 corr = 0;
+	float InvDensity = 1.0f / Density;
+	float MassMulInvDensity = ParticleMass * InvDensity;
+
+	int3 hashIndex = HashIndex(pi);
+	int3 size = HashSize;
+	int sizexy = size.x * size.y;
+
+	LOOP_START
+
+	int xi = hashIndex.x + i;
+	int yj = hashIndex.y + j;
+	int zk = hashIndex.z + k;
+
+	if (xi < 0 || xi >= size.x) continue;
+	if (yj < 0 || yj >= size.y) continue;
+	if (zk < 0 || zk >= size.z) continue;
+
+	int hash = xi + yj * size.x + zk * sizexy;
+	int2 bounds = Table[hash];
+
+	for (int idx = bounds.x; idx <= bounds.y; idx++)
+	{
+		int n = IndexMap[idx].y;
+		if (n == id) continue;
+
+		float dist2;
+		float3 diff;
+		float psi = 0.0f;
+		if (n < NumParticles)
+		{
+			diff = pi - PredictedREAD[n].xyz;
+			dist2 = Length2(diff);
+		}
+		else
+		{
+			int m = n - NumParticles;
+			float4 b = Boundary[m];
+			diff = pi - b.xyz;
+			psi = b.w;
+			dist2 = Length2(diff);
+		}
+
+		if (dist2 >= KernelRadius2) continue;
+
+		if (n < NumParticles)
+		{
+			float3 gradW = SpikyGradKernel(diff, dist2);
+            corr -= (pressure + Pressures[n]) * -MassMulInvDensity * gradW;
+		}
+		else
+		{
+			float3 gradW = SpikyGradKernel(diff, dist2);
+			corr -= pressure * -psi * InvDensity * gradW;
+		}
+	}
+
+	LOOP_END
+
+	return corr;
+}
+
+#pragma kernel SolveConstraint
+
+[numthreads(THREADS, 1, 1)]
+void SolveConstraint(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { PredictedWRITE[id] = PredictedREAD[id]; return; }
+
+		float3 pi = PredictedREAD[id].xyz;
+		float pressure = Pressures[id];
+
+		float3 corr = SolveDensity(id, pi, pressure);
+		float cl = length(corr);
+		if (cl > MaxCorrection) corr *= MaxCorrection / cl;   // clamp anti-pipoca
+		pi += corr;
+
+		PredictedWRITE[id] = float4(pi, 0);
+	}
+}
+
+// projeta as particulas p/ fora do vidro dos frascos (depois do constraint).
+#pragma kernel SolveGlassware
+
+[numthreads(THREADS, 1, 1)]
+void SolveGlassware(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { PredictedWRITE[id] = PredictedREAD[id]; return; }
+
+		float3 p0 = PredictedREAD[id].xyz;
+		float3 p = p0;
+		for (int f = 0; f < GlasswareCount; f++)
+		{
+			Glassware g = Glasswares[f];
+			float3 previousDelta = Positions[id].xyz - g.center;
+			float3 previousLp = float3(dot(previousDelta, g.axisX),
+			                          dot(previousDelta, g.axisY),
+			                          dot(previousDelta, g.axisZ)) / max(g.scale, 1e-4);
+			float3 d = p - g.center;
+			float3 lp = float3(dot(d, g.axisX), dot(d, g.axisY), dot(d, g.axisZ)) / max(g.scale, 1e-4);
+			lp = GlasswareResolve(g, previousLp, lp);
+			float3 ws = lp * g.scale;
+			p = g.center + ws.x * g.axisX + ws.y * g.axisY + ws.z * g.axisZ;
+		}
+		// limita a correcao da parede por passo -> empurra suave, nao teleporta.
+		float3 dp = p - p0;
+		float mag = length(dp);
+		if (GlassMaxStep > 0 && mag > GlassMaxStep) p = p0 + dp * (GlassMaxStep / mag);
+		PredictedWRITE[id] = float4(p, 0);
+	}
+}
+
+// projeta as particulas p/ fora do vidro dos frascos SDF (mesh arbitrario)
+#pragma kernel SolveFlaskSDF
+
+[numthreads(THREADS, 1, 1)]
+void SolveFlaskSDF(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { PredictedWRITE[id] = PredictedREAD[id]; return; }
+
+		float3 p = PredictedREAD[id].xyz;
+		for (int f = 0; f < SDFFlaskCount; f++)
+		{
+			FlaskSDFData fl = SDFFlasks[f];
+			float3 d = p - fl.center;
+			float3 lp = float3(dot(d, fl.axisX), dot(d, fl.axisY), dot(d, fl.axisZ)) / max(fl.scale, 1e-4);
+			lp = FlaskSDFResolve(fl, lp);
+			float3 ws = lp * fl.scale;
+			p = fl.center + ws.x * fl.axisX + ws.y * fl.axisY + ws.z * fl.axisZ;
+		}
+		PredictedWRITE[id] = float4(p, 0);
+	}
+}
+
+// ============================================================================
+//  COLISORES por LAYER (C2): primitivas analiticas (sphere/box/capsule/plane).
+//  Empurra a particula p/ FORA da primitiva. Atualizado por frame (segue Transforms).
+// ============================================================================
+struct ColliderGPU
+{
+	int type;         // 0 sphere, 1 box, 2 capsule, 3 plane
+	float3 center;    // mundo
+	float3 axisX;     // base ortonormal (mundo)
+	float3 axisY;
+	float3 axisZ;
+	float3 halfExt;   // box: meias-extensoes; capsule: (_, meia-altura do segmento, _)
+	float radius;     // sphere/capsule raio
+	float3 velocity;  // vel. do colisor (mundo) — arrasta o fluido (atrito)
+};
+StructuredBuffer<ColliderGPU> Colliders;
+int ColliderCount;
+float ColliderClearance;   // folga = raio da particula
+float ColliderFriction;    // 0..1: quanto o colisor em MOVIMENTO arrasta o fluido (atrito)
+
+// sd (negativo = dentro) + normal (mundo) em outN. wp = pos mundo.
+float ColliderSDF(ColliderGPU c, float3 wp, out float3 outN)
+{
+	float3 dd = wp - c.center;
+	float3 lp = float3(dot(dd, c.axisX), dot(dd, c.axisY), dot(dd, c.axisZ)); // local
+
+	if (c.type == 0) // sphere
+	{
+		float len = length(lp);
+		float3 nl = (len > 1e-6) ? lp / len : float3(0, 1, 0);
+		outN = nl.x * c.axisX + nl.y * c.axisY + nl.z * c.axisZ;
+		return len - c.radius;
+	}
+	else if (c.type == 2) // capsule (eixo = axisY local)
+	{
+		float3 pp = lp;
+		pp.y -= clamp(pp.y, -c.halfExt.y, c.halfExt.y); // ponto no segmento
+		float len = length(pp);
+		float3 nl = (len > 1e-6) ? pp / len : float3(0, 1, 0);
+		outN = nl.x * c.axisX + nl.y * c.axisY + nl.z * c.axisZ;
+		return len - c.radius;
+	}
+	else if (c.type == 3) // plane (normal = axisY local)
+	{
+		outN = c.axisY;
+		return dot(dd, c.axisY);   // dist assinada (positivo acima)
+	}
+	else // box (type 1)
+	{
+		float3 he = c.halfExt;
+		float3 q = abs(lp) - he;
+		float3 nl;
+		float sd;
+		if (max(q.x, max(q.y, q.z)) > 0.0)             // fora
+		{
+			float3 cp = clamp(lp, -he, he);
+			float3 diff = lp - cp;
+			float dist = length(diff);
+			nl = (dist > 1e-6) ? diff / dist : float3(0, 1, 0);
+			sd = dist;
+		}
+		else                                            // dentro: face mais proxima
+		{
+			float3 pen = he - abs(lp);
+			if (pen.x <= pen.y && pen.x <= pen.z)      { nl = float3(sign(lp.x), 0, 0); sd = -pen.x; }
+			else if (pen.y <= pen.z)                   { nl = float3(0, sign(lp.y), 0); sd = -pen.y; }
+			else                                        { nl = float3(0, 0, sign(lp.z)); sd = -pen.z; }
+		}
+		outN = nl.x * c.axisX + nl.y * c.axisY + nl.z * c.axisZ;
+		return sd;
+	}
+}
+
+#pragma kernel SolveColliders
+
+[numthreads(THREADS, 1, 1)]
+void SolveColliders(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { PredictedWRITE[id] = PredictedREAD[id]; return; }
+
+		float3 p = PredictedREAD[id].xyz;
+		for (int c = 0; c < ColliderCount; c++)
+		{
+			float3 n;
+			ColliderGPU col = Colliders[c];
+			float sd = ColliderSDF(col, p, n);
+			if (sd < ColliderClearance)
+			{
+				p += n * (ColliderClearance - sd);          // empurra p/ fora + folga
+				// ATRITO self-limitado: puxa a velocidade da particula p/ a do colisor (nao ULTRAPASSA).
+				// rel = vel_colisor - vel_particula; colisor parado + particula parada => 0 (desliza
+				// livre). Colisor movendo => leva o fluido junto ate' igualar a vel dele (ColliderFriction
+				// = quao rapido converge). Antes era +col.velocity*dt (ACUMULAVA -> fluido mais rapido
+				// que o colisor).
+				float3 relVel = col.velocity - VelocitiesREAD[id].xyz;
+				p += relVel * DeltaTime * ColliderFriction;
+			}
+		}
+		PredictedWRITE[id] = float4(p, 0);
+	}
+}
+
+// ============================================================================
+//  KILL-ON-CONTACT (C1b): colisores de MORTE. Particula que ENCOSTA em qualquer
+//  um deles SOME (States=1 + cemiterio). Usado p/ objetos que NAO sao da layer
+//  "collider": tocar = sumir. Mesma struct ColliderGPU; roda nas posicoes finais.
+// ============================================================================
+StructuredBuffer<ColliderGPU> KillColliders;
+int KillColliderCount;
+float KillClearance;   // folga (raio da particula)
+
+#pragma kernel SolveKillColliders
+
+[numthreads(THREADS, 1, 1)]
+void SolveKillColliders(int id : SV_DispatchThreadID)
+{
+	if (id >= NumParticles) return;
+	if (IsDead(id)) return;
+
+	float3 p = Positions[id].xyz;
+	for (int c = 0; c < KillColliderCount; c++)
+	{
+		float3 n;
+		float sd = ColliderSDF(KillColliders[c], p, n);
+		if (sd < KillClearance)   // encostou/entrou -> morre
+		{
+			States[id] = 1.0;
+			Positions[id] = float4(Graveyard, 0);
+			return;
+		}
+	}
+}
+
+// respingo fora de qualquer frasco + assentado no chao -> some apos timeout.
+// "some" = teleporta pro cemiterio (fora da vista) + congela pra sempre.
+#pragma kernel DespawnPass
+
+RWStructuredBuffer<float> OutsideTimer;
+float DespawnTimeout;
+float FullDT;
+
+[numthreads(THREADS, 1, 1)]
+void DespawnPass(int id : SV_DispatchThreadID)
+{
+	if (id >= NumParticles) return;
+
+	float3 p = Positions[id].xyz;
+
+	// ja no cemiterio -> nada
+	if (distance(p, Graveyard) < 0.5) return;
+
+	// dentro dos bounds de algum frasco SDF -> vivo, zera timer
+	bool insideAny = false;
+	for (int f = 0; f < SDFFlaskCount; f++)
+	{
+		FlaskSDFData fl = SDFFlasks[f];
+		float3 d = p - fl.center;
+		float3 lp = float3(dot(d, fl.axisX), dot(d, fl.axisY), dot(d, fl.axisZ)) / max(fl.scale, 1e-4);
+		if (all(lp >= fl.bmin) && all(lp <= fl.bmin + fl.bsize)) { insideAny = true; break; }
+	}
+
+	if (insideAny) { OutsideTimer[id] = 0; return; }
+
+	// fora: so conta se quase parada (jato caindo nao despawna)
+	float sp = length(VelocitiesREAD[id].xyz);
+	if (sp > DespawnSpeed) { OutsideTimer[id] = 0; return; }
+
+	float t = OutsideTimer[id] + FullDT;
+	OutsideTimer[id] = t;
+	if (t > DespawnTimeout)
+	{
+		Positions[id] = float4(Graveyard, 0);
+		States[id] = 1.0; // morta: kernels pulam, fica no cemiterio
+	}
+}
+
+// ============================================================================
+//  KILL PLANE (C1): "chao invisivel" que cobre o mapa. Particula ABAIXO do
+//  plano -> some (States=1 + cemiterio). Roda apos as posicoes finais do frame.
+// ============================================================================
+#pragma kernel KillPlanePass
+
+float4 KillPlane;       // xyz = normal mundo (normalizada), w = -dot(normal, ponto)
+int KillPlaneEnabled;
+
+[numthreads(THREADS, 1, 1)]
+void KillPlanePass(int id : SV_DispatchThreadID)
+{
+	if (id >= NumParticles) return;
+	if (KillPlaneEnabled == 0) return;
+	if (IsDead(id)) return;
+
+	float3 p = Positions[id].xyz;
+	if (dot(KillPlane.xyz, p) + KillPlane.w < 0.0)   // abaixo do plano -> some
+	{
+		States[id] = 1.0;
+		Positions[id] = float4(Graveyard, 0);
+	}
+}
+
+#pragma kernel UpdateVelocities
+
+[numthreads(THREADS, 1, 1)]
+void UpdateVelocities(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { VelocitiesWRITE[id] = float4(0, 0, 0, 0); return; }
+
+		float3 p = Positions[id].xyz;
+		float3 pi = PredictedREAD[id].xyz;
+
+		float3 velocity = (pi - p) / DeltaTime;
+
+		// clamp CFL: mata "pipoca" (uma correcao ruim nao lanca a particula)
+		float s = length(velocity);
+		if (s > MaxSpeed) { velocity *= MaxSpeed / s; s = MaxSpeed; }
+
+		// dissipacao p/ REPOUSO (Newton): forte devagar, fraca rapido.
+		float damp = lerp(RestDamping, MoveDamping, saturate(s / max(DampRefSpeed, 1e-5)));
+		velocity *= max(0.0, 1.0 - damp * DeltaTime);
+
+		VelocitiesWRITE[id] = float4(velocity, 0);
+	}
+}
+
+float3 ComputeViscosity(int id, float3 pi)
+{
+
+	float viscosityMulMass = Viscosity * ParticleMass;
+
+	int3 hashIndex = HashIndex(pi);
+	int3 size = HashSize;
+	float sizexy = size.x * size.y;
+
+	float3 velocity = VelocitiesREAD[id].xyz;
+
+	LOOP_START
+
+	int xi = hashIndex.x + i;
+	int yj = hashIndex.y + j;
+	int zk = hashIndex.z + k;
+
+	if (xi < 0 || xi >= size.x) continue;
+	if (yj < 0 || yj >= size.y) continue;
+	if (zk < 0 || zk >= size.z) continue;
+
+	int hash = xi + yj * size.x + zk * sizexy;
+	int2 bounds = Table[hash];
+
+	for (int idx = bounds.x; idx <= bounds.y; idx++)
+	{
+		int n = IndexMap[idx].y;
+		if (n == id || n >= NumParticles) continue;
+
+		float3 pn = PredictedREAD[n].xyz;
+		float dist2 = Distance2(pi, pn);
+		if (dist2 >= KernelRadius2) continue;
+
+		// XSPH: peso = kernel NORMALIZADO (Poly6). Sum_j (m_j/rho_j) Poly6 ~= 1, entao
+		// o blend fica limitado por Viscosity (c in [0,1]) e e' INVARIANTE DE ESCALA.
+		// (Antes usava ViscLapKernel ~ 1/h^6 => coef ~1/h^2 por vizinho: p/ raio pequeno
+		//  dava ~0.95 por vizinho * N vizinhos >> 1 => XSPH dispara => explosao/pipoca.)
+		float invDensity = 1.0f / Densities[n];
+		float v = Poly6Kernel(dist2) * viscosityMulMass * invDensity;
+		velocity += v * (VelocitiesREAD[n].xyz - velocity);
+	}
+
+	LOOP_END
+
+	return velocity;
+
+}
+
+#pragma kernel SolveViscosity
+
+[numthreads(THREADS, 1, 1)]
+void SolveViscosity(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) { VelocitiesWRITE[id] = float4(0, 0, 0, 0); return; }
+
+		float3 pi = PredictedREAD[id].xyz;
+
+		float3 velocity = ComputeViscosity(id, pi);
+
+		VelocitiesWRITE[id] = float4(velocity,0);
+	}
+}
+
+#pragma kernel UpdatePositions
+
+[numthreads(THREADS, 1, 1)]
+void UpdatePositions(int id : SV_DispatchThreadID)
+{
+	if (id < NumParticles)
+	{
+		if (IsDead(id)) return;   // morta: posicao fixa
+		Positions[id] = PredictedREAD[id];
+	}
+}

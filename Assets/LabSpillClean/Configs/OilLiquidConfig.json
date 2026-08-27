@@ -1,0 +1,20 @@
+{
+  "liquidName": "Oleo",
+  "category": "oleoso",
+  "densityKgPerLiter": 0.92,
+  "viscosity": 68.0,
+  "boilingPointC": 300.0,
+  "surfaceColor": { "r": 1.0, "g": 0.74, "b": 0.20, "a": 0.9 },
+  "bodyColor": { "r": 0.72, "g": 0.34, "b": 0.035, "a": 0.76 },
+  "deepColor": { "r": 0.30, "g": 0.085, "b": 0.008, "a": 1.0 },
+  "absorptionColor": { "r": 0.92, "g": 0.52, "b": 0.10, "a": 1.0 },
+  "emissionColor": { "r": 1.0, "g": 0.34, "b": 0.025, "a": 1.0 },
+  "absorptionDensity": 3.2,
+  "transparency": 0.38,
+  "lightTransmission": 0.62,
+  "surfaceOpacity": 0.76,
+  "turbidity": 0.2,
+  "smoothness": 0.86,
+  "indexOfRefraction": 1.47,
+  "emissionStrength": 0.55
+}

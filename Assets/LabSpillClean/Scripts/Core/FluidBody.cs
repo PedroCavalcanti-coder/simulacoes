@@ -163,31 +163,6 @@ namespace PBDFluid
         }
 
         /// <summary>
-        /// Adiciona particulas (cresce os buffers). Usado pelo emissor / botao
-        /// "adicionar liquido". Apos chamar, recrie o FluidSolver (a contagem
-        /// mudou -> hash/bitonic precisam ser refeitos).
-        /// </summary>
-        public void Append(Vector3[] pts, Vector3 initialVel) { Append(pts, initialVel, Color.white, 0); }
-
-        public void Append(Vector3[] pts, Vector3 initialVel, Color col) { Append(pts, initialVel, col, 0); }
-
-        public void Append(Vector3[] pts, Vector3 initialVel, Color col, uint substanceId)
-        {
-            if (pts == null || pts.Length == 0) return;
-
-            var velocities = new Vector3[pts.Length];
-            var colors = new Color[pts.Length];
-            var substanceIds = new uint[pts.Length];
-            for (int i = 0; i < pts.Length; i++)
-            {
-                velocities[i] = initialVel;
-                colors[i] = col;
-                substanceIds[i] = substanceId;
-            }
-            Append(pts, velocities, colors, substanceIds);
-        }
-
-        /// <summary>
         /// Adiciona um lote heterogeneo em uma unica realocacao. Cada particula
         /// pode ter velocidade, cor e substancia proprias; emissores simultaneos
         /// usam este caminho para pagar um unico readback/rebuild por intervalo.

@@ -20,10 +20,6 @@ namespace PBDFluid
         private ComputeBuffer m_colliderBuffer;
         private int m_colliderCount;
 
-        // colisores de MORTE (kill-on-contact): tocar = particula some
-        private ComputeBuffer m_killColliderBuffer;
-        private int m_killColliderCount;
-
         // 0..1: atrito com o colisor. Colisor MOVENDO arrasta o fluido ate' a vel dele; fluido
         // deslizando num colisor PARADO freia aos poucos (desliza "levemente"). 0 = sem atrito.
         public float ColliderFriction = 0.4f;
@@ -67,7 +63,6 @@ namespace PBDFluid
         private readonly int m_computeDensityKernel;
         private readonly int m_solveConstraintKernel;
         private readonly int m_solveCollidersKernel;
-        private readonly int m_solveKillCollidersKernel;
         private readonly int m_updateVelocitiesKernel;
         private readonly int m_solveViscosityKernel;
         private readonly int m_updatePositionsKernel;
@@ -94,7 +89,6 @@ namespace PBDFluid
             m_computeDensityKernel = m_shader.FindKernel("ComputeDensity");
             m_solveConstraintKernel = m_shader.FindKernel("SolveConstraint");
             m_solveCollidersKernel = m_shader.FindKernel("SolveColliders");
-            m_solveKillCollidersKernel = m_shader.FindKernel("SolveKillColliders");
             m_updateVelocitiesKernel = m_shader.FindKernel("UpdateVelocities");
             m_solveViscosityKernel = m_shader.FindKernel("SolveViscosity");
             m_updatePositionsKernel = m_shader.FindKernel("UpdatePositions");
@@ -105,7 +99,6 @@ namespace PBDFluid
         {
             Hash.Dispose();
             m_colliderBuffer?.Release(); m_colliderBuffer = null;
-            m_killColliderBuffer?.Release(); m_killColliderBuffer = null;
         }
 
         public void StepPhysics(float dt)
@@ -165,8 +158,6 @@ namespace PBDFluid
 
                 UpdatePositions();
             }
-
-            SolveKillColliders();   // tocar objeto de morte -> some
 
         }
 
@@ -280,35 +271,6 @@ namespace PBDFluid
             m_shader.Dispatch(kernel, Groups, 1, 1);
 
             Swap(Body.Predicted);
-        }
-
-        // ---- colisores de MORTE (kill-on-contact) ----
-        public void SetKillColliders(ColliderGPU[] arr)
-        {
-            m_killColliderCount = (arr == null) ? 0 : arr.Length;
-            if (m_killColliderCount == 0) return;
-            if (m_killColliderBuffer == null || m_killColliderBuffer.count != m_killColliderCount)
-            {
-                m_killColliderBuffer?.Release();
-                m_killColliderBuffer = new ComputeBuffer(m_killColliderCount, Marshal.SizeOf(typeof(ColliderGPU)));
-            }
-            m_killColliderBuffer.SetData(arr);
-        }
-
-        // roda nas posicoes FINAIS (1x/frame): particula tocando colisor de morte -> some.
-        private void SolveKillColliders()
-        {
-            if (m_killColliderBuffer == null || m_killColliderCount == 0) return;
-
-            int kernel = m_solveKillCollidersKernel;
-            m_shader.SetInt("KillColliderCount", m_killColliderCount);
-            m_shader.SetFloat("KillClearance", Body.ParticleRadius);
-            m_shader.SetVector("Graveyard", Graveyard);
-            m_shader.SetBuffer(kernel, "KillColliders", m_killColliderBuffer);
-            m_shader.SetBuffer(kernel, "Positions", Body.Positions);
-            m_shader.SetBuffer(kernel, "States", Body.States);
-
-            m_shader.Dispatch(kernel, Groups, 1, 1);
         }
 
         private void UpdatePositions()

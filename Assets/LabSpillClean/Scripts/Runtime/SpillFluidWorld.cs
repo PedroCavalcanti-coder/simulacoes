@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using LabLiquidVR;
@@ -68,9 +68,7 @@ namespace LabSpill
             new Dictionary<ReceiverLiquidKey, int>();
         readonly List<uint> m_particleSubstances = new List<uint>();
         readonly List<int> m_liveParticlesPerLiquid = new List<int>();
-        readonly List<FluidSolver.ColliderGPU> m_benchColliders =
-            new List<FluidSolver.ColliderGPU>();
-        readonly List<FluidSolver.ColliderGPU> m_groundColliders =
+        readonly List<FluidSolver.ColliderGPU> m_surfaceColliders =
             new List<FluidSolver.ColliderGPU>();
 
         FluidBody m_fluid;
@@ -190,19 +188,15 @@ namespace LabSpill
 
         void UploadSurfaceColliders()
         {
-            m_benchColliders.Clear();
-            m_groundColliders.Clear();
+            m_surfaceColliders.Clear();
             for (int i = 0; i < m_surfaces.Length; i++)
             {
                 SpillSurface surface = m_surfaces[i];
                 Collider col = surface != null ? surface.Collider : null;
                 if (col == null || !col.enabled) continue;
-                FluidSolver.ColliderGPU gpu = ColliderToGpu(col);
-                if (surface.kind == SpillSurfaceKind.Ground) m_groundColliders.Add(gpu);
-                else m_benchColliders.Add(gpu);
+                m_surfaceColliders.Add(ColliderToGpu(col));
             }
-            m_solver.SetColliders(m_benchColliders.ToArray());
-            m_solver.SetKillColliders(m_groundColliders.ToArray());
+            m_solver.SetColliders(m_surfaceColliders.ToArray());
         }
 
         void Update()

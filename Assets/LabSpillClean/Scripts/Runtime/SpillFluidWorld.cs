@@ -518,7 +518,9 @@ namespace LabSpill
                 view.entry.FilterBySubstance = true;
                 // Slot morto carrega SubstanceIds 0xFFFFFFFF, que nunca casa com o
                 // indice de nenhum liquido: o vertex shader do SSF descarta sozinho.
-                view.entry.Count = hasParticles ? m_pool.Capacity : 0;
+                // Ate a marca d'agua, e nao ate a capacidade: o resto do buffer nunca
+                // foi ocupado e so geraria quads degenerados.
+                view.entry.Count = hasParticles ? m_pool.HighWaterMark : 0;
                 view.entry.Radius = settings.PhysicalRadius;
                 view.entry.WorldBounds = m_domain;
                 view.entry.SurfaceRenderer = view.renderer;

@@ -28,6 +28,15 @@ namespace PBDFluid
         /// <summary>Quantos slots estao vivos agora, mantido pela lista livre.</summary>
         public int AliveCount => Capacity - m_freeSlots.Count;
 
+        /// <summary>
+        /// Maior slot ocupado + 1. O renderer desenha ate aqui, e nao ate Capacity:
+        /// como todo kernel e todo splat de slot morto termina descartado, desenhar a
+        /// capacidade inteira significaria rasterizar milhares de quads degenerados
+        /// por passe so para joga-los fora. A alocacao prefere os slots baixos, entao
+        /// esta marca acompanha de perto a contagem de vivas.
+        /// </summary>
+        public int HighWaterMark { get; private set; }
+
         public float Density { get; }
         public float Viscosity { get; set; }
         public float Dampning { get; set; }
@@ -55,6 +64,7 @@ namespace PBDFluid
         // slots ocupados ficam agrupados no inicio do buffer, o que ajuda a coerencia
         // de cache dos kernels enquanto ha pouco liquido em cena.
         readonly Stack<int> m_freeSlots;
+        readonly bool[] m_occupied;
 
         public FluidPool(int capacity, float radius, float density)
         {
@@ -91,6 +101,7 @@ namespace PBDFluid
             m_freeSlots = new Stack<int>(Capacity);
             for (int i = Capacity - 1; i >= 0; i--)
                 m_freeSlots.Push(i);
+            m_occupied = new bool[Capacity];
         }
 
         /// <summary>
@@ -137,6 +148,8 @@ namespace PBDFluid
             }
 
             slot = m_freeSlots.Pop();
+            m_occupied[slot] = true;
+            if (slot >= HighWaterMark) HighWaterMark = slot + 1;
             return true;
         }
 
@@ -146,8 +159,16 @@ namespace PBDFluid
         /// </summary>
         public void ReleaseSlot(int slot)
         {
-            if (slot >= 0 && slot < Capacity)
-                m_freeSlots.Push(slot);
+            if (slot < 0 || slot >= Capacity) return;
+
+            m_freeSlots.Push(slot);
+            m_occupied[slot] = false;
+
+            // Liberar o slot do topo abaixa a marca ate o proximo ocupado. Sem isso a
+            // marca so subiria, e depois do primeiro derrame grande o renderer voltaria
+            // a desenhar a capacidade inteira para sempre.
+            while (HighWaterMark > 0 && !m_occupied[HighWaterMark - 1])
+                HighWaterMark--;
         }
 
         public void Dispose()

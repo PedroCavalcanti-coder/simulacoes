@@ -9260,7 +9260,6 @@ GameObject:
   - component: {fileID: 1762072915}
   - component: {fileID: 1762072914}
   - component: {fileID: 1762072913}
-  - component: {fileID: 1762072917}
   m_Layer: 0
   m_Name: Lab Bench Top
   m_TagString: Untagged
@@ -9578,19 +9577,6 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
---- !u!114 &1762072917
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1762072910}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 26c25d58a5a194742afab3a157fc8395, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::LabSpill.SpillSurface
-  kind: 0
 --- !u!1 &1825261172
 GameObject:
   m_ObjectHideFlags: 0
@@ -9641,7 +9627,6 @@ GameObject:
   - component: {fileID: 1854340660}
   - component: {fileID: 1854340659}
   - component: {fileID: 1854340658}
-  - component: {fileID: 1854340662}
   m_Layer: 0
   m_Name: Lab Ground
   m_TagString: Untagged
@@ -9959,19 +9944,6 @@ MeshRenderer:
   m_SortingOrder: 0
   m_MaskInteraction: 0
   m_AdditionalVertexStreams: {fileID: 0}
---- !u!114 &1854340662
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1854340655}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 26c25d58a5a194742afab3a157fc8395, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::LabSpill.SpillSurface
-  kind: 1
 --- !u!1 &1904700204
 GameObject:
   m_ObjectHideFlags: 0

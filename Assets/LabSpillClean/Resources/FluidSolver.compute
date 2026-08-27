@@ -78,11 +78,40 @@ float Relaxation;     // epsilon CFM no denominador de lambda (era hardcoded 60)
 // derrame continua vivo). Interpola por velocidade:
 //   damp = lerp(RestDamping, MoveDamping, saturate(speed / DampRefSpeed))
 //   v *= (1 - damp*dt)
+float Cohesion;      // aceleracao (m/s2) da coesao entre vizinhos. 0 = desligada
 float RestDamping;   // 1/s em repouso (alto = assenta rapido). ~6
 float MoveDamping;   // 1/s em movimento rapido (baixo = jato vivo). ~0.2
 float DampRefSpeed;  // vel (m/s) onde ja e' "rapido" (usa MoveDamping). ~0.35
 
-StructuredBuffer<float4> Boundary;
+// ID logico da substancia. O renderer filtra por ele; 0xFFFFFFFF = slot morto,
+// que o vertex shader do SSF ja descarta sem precisar conhecer States.
+RWStructuredBuffer<uint> SubstanceIds;
+
+// Instante absoluto (SimTime) em que cada particula deve morrer de velhice.
+RWStructuredBuffer<float> DeathTimes;
+
+// Slots que morreram neste passo: (slot, porto+1). porto+1 = 0 significa morte por
+// tempo de vida; >0 identifica o frasco que capturou a particula. A CPU le isto de
+// forma assincrona para devolver o slot a lista livre e creditar o volume.
+AppendStructuredBuffer<uint2> Deaths;
+
+float SimTime;
+float3 Graveyard;    // onde a particula morta fica estacionada, fora de vista
+
+// Bocas de frasco. Particula que entra numa delas e capturada: some do jato e vira
+// volume no recipiente. Testado no mesmo kernel que confirma a posicao, entao a
+// amostragem e por substep e nao por frame - jato rapido nao atravessa mais a boca
+// entre duas leituras.
+struct PortGPU
+{
+	float3 center;
+	float radius;
+	float3 normal;
+	float captureDepth;
+};
+StructuredBuffer<PortGPU> Ports;
+int PortCount;
+float PortEntryDepth;   // quanto acima do plano da boca ja conta como dentro
 
 float3 Gravity;
 float Dampning;
@@ -191,39 +220,14 @@ void ComputeDensityAndPressure(int id, float3 pi, out float density, out float p
 		int n = IndexMap[idx].y;
 		if (n == id) continue;
 
-		float dist2;
-		float3 diff;
-		float psi = 0.0f;
-		if (n < NumParticles)
-		{
-			diff = pi - PredictedREAD[n].xyz;
-			dist2 = Length2(diff);
-		}
-		else
-		{
-			int m = n - NumParticles;
-			float4 b = Boundary[m];
-			diff = pi - b.xyz;
-			psi = b.w;
-			dist2 = Length2(diff);
-		}
-
+		float3 diff = pi - PredictedREAD[n].xyz;
+		float dist2 = Length2(diff);
 		if (dist2 >= KernelRadius2) continue;
 
-		if (n < NumParticles)
-		{
-			density += ParticleMass * Poly6Kernel(dist2);
-			float3 gradC_j = -MassMulInvDensity * SpikyGradKernel(diff, dist2);
-			sum_grad_C2 += dot(gradC_j, gradC_j);
-			gradC_i -= gradC_j;
-		}
-		else
-		{
-			density += psi * Poly6Kernel(dist2);
-			float3 gradC_j = -psi * InvDensity * SpikyGradKernel(diff, dist2);
-			sum_grad_C2 += Length2(gradC_j);
-			gradC_i -= gradC_j;
-		}
+		density += ParticleMass * Poly6Kernel(dist2);
+		float3 gradC_j = -MassMulInvDensity * SpikyGradKernel(diff, dist2);
+		sum_grad_C2 += dot(gradC_j, gradC_j);
+		gradC_i -= gradC_j;
 	}
 
 	LOOP_END
@@ -289,35 +293,12 @@ float3 SolveDensity(int id, float3 pi, float pressure)
 		int n = IndexMap[idx].y;
 		if (n == id) continue;
 
-		float dist2;
-		float3 diff;
-		float psi = 0.0f;
-		if (n < NumParticles)
-		{
-			diff = pi - PredictedREAD[n].xyz;
-			dist2 = Length2(diff);
-		}
-		else
-		{
-			int m = n - NumParticles;
-			float4 b = Boundary[m];
-			diff = pi - b.xyz;
-			psi = b.w;
-			dist2 = Length2(diff);
-		}
-
+		float3 diff = pi - PredictedREAD[n].xyz;
+		float dist2 = Length2(diff);
 		if (dist2 >= KernelRadius2) continue;
 
-		if (n < NumParticles)
-		{
-			float3 gradW = SpikyGradKernel(diff, dist2);
-            corr -= (pressure + Pressures[n]) * -MassMulInvDensity * gradW;
-		}
-		else
-		{
-			float3 gradW = SpikyGradKernel(diff, dist2);
-			corr -= pressure * -psi * InvDensity * gradW;
-		}
+		float3 gradW = SpikyGradKernel(diff, dist2);
+		corr -= (pressure + Pressures[n]) * -MassMulInvDensity * gradW;
 	}
 
 	LOOP_END
@@ -476,10 +457,28 @@ void UpdateVelocities(int id : SV_DispatchThreadID)
 	}
 }
 
+// Spline de coesao de Akinci, normalizada para valer 1 no seu maximo (r = h/2).
+// Com isso Cohesion e uma aceleracao em m/s2, comparavel com a gravidade, em vez de
+// um numero que muda de ordem de grandeza toda vez que o raio da particula muda.
+float CohesionSpline01(float r)
+{
+	float h = KernelRadius;
+	if (r <= 0.0 || r >= h) return 0.0;
+
+	float a = h - r;
+	float w = (2.0 * r > h)
+		? a * a * a * r * r * r
+		: 2.0 * a * a * a * r * r * r - (h * h * h * h * h * h) / 64.0;
+
+	// 32/(pi h^9) e a normalizacao original; multiplicar por 2 pi h^3 leva o pico a 1.
+	return w * 64.0 / (h * h * h * h * h * h);
+}
+
 float3 ComputeViscosity(int id, float3 pi)
 {
 
 	float viscosityMulMass = Viscosity * ParticleMass;
+	float3 cohesionAccel = 0;
 
 	int3 hashIndex = HashIndex(pi);
 	int3 size = HashSize;
@@ -503,11 +502,18 @@ float3 ComputeViscosity(int id, float3 pi)
 	for (int idx = bounds.x; idx <= bounds.y; idx++)
 	{
 		int n = IndexMap[idx].y;
-		if (n == id || n >= NumParticles) continue;
+		if (n == id) continue;
 
 		float3 pn = PredictedREAD[n].xyz;
 		float dist2 = Distance2(pi, pn);
 		if (dist2 >= KernelRadius2) continue;
+
+		// COESAO: puxa a particula na direcao dos vizinhos. No interior os vizinhos
+		// cercam a particula e a soma se cancela; na superficie ela e' puxada para
+		// dentro. E isso que faz o jato sair como filete continuo que se parte em
+		// gotas, em vez de um colar de esferas independentes.
+		float dist = sqrt(dist2);
+		cohesionAccel -= Cohesion * CohesionSpline01(dist) * ((pi - pn) / max(dist, 1e-6));
 
 		// XSPH: peso = kernel NORMALIZADO (Poly6). Sum_j (m_j/rho_j) Poly6 ~= 1, entao
 		// o blend fica limitado por Viscosity (c in [0,1]) e e' INVARIANTE DE ESCALA.
@@ -520,7 +526,7 @@ float3 ComputeViscosity(int id, float3 pi)
 
 	LOOP_END
 
-	return velocity;
+	return velocity + cohesionAccel * DeltaTime;
 
 }
 
@@ -541,14 +547,113 @@ void SolveViscosity(int id : SV_DispatchThreadID)
 	}
 }
 
+// Mata o slot: estaciona no cemiterio, esconde do renderer e avisa a CPU. Todo
+// caminho de morte passa por aqui, para que a lista de slots livres tenha uma unica
+// fonte. portPlusOne = 0 -> morreu de velhice; > 0 -> foi capturada pelo porto - 1.
+void KillParticle(int id, uint portPlusOne)
+{
+	States[id] = 1.0;
+	Positions[id] = float4(Graveyard, 0);
+	SubstanceIds[id] = 0xFFFFFFFF;
+	Deaths.Append(uint2((uint)id, portPlusOne));
+}
+
+// A particula entrou na boca deste frasco? Dois testes: onde ela parou, e o segmento
+// que percorreu. O segundo existe porque uma gota rapida pode atravessar o plano
+// inteiro da boca dentro de um unico substep.
+bool EntersPort(PortGPU port, float3 pOld, float3 pNew)
+{
+	float3 dNew = pNew - port.center;
+	float axial = dot(dNew, port.normal);
+	float3 radial = dNew - port.normal * axial;
+	float r2 = port.radius * port.radius;
+
+	if (axial <= PortEntryDepth && axial >= -port.captureDepth && dot(radial, radial) <= r2)
+		return true;
+
+	float axialOld = dot(pOld - port.center, port.normal);
+	float denom = axialOld - axial;
+	if (axialOld >= 0.0 && axial <= 0.0 && abs(denom) > 1e-6)
+	{
+		float t = saturate(axialOld / denom);
+		float3 hit = lerp(pOld, pNew, t) - port.center;
+		float3 hitRadial = hit - port.normal * dot(hit, port.normal);
+		if (dot(hitRadial, hitRadial) <= r2)
+			return true;
+	}
+
+	return false;
+}
+
 #pragma kernel UpdatePositions
 
 [numthreads(THREADS, 1, 1)]
 void UpdatePositions(int id : SV_DispatchThreadID)
 {
-	if (id < NumParticles)
+	if (id >= NumParticles) return;
+	if (IsDead(id)) return;
+
+	float3 pOld = Positions[id].xyz;
+	float3 pNew = PredictedREAD[id].xyz;
+
+	for (int c = 0; c < PortCount; c++)
 	{
-		if (IsDead(id)) return;   // morta: posicao fixa
-		Positions[id] = PredictedREAD[id];
+		if (EntersPort(Ports[c], pOld, pNew))
+		{
+			KillParticle(id, (uint)(c + 1));
+			return;
+		}
 	}
+
+	if (SimTime >= DeathTimes[id])
+	{
+		KillParticle(id, 0);
+		return;
+	}
+
+	Positions[id] = float4(pNew, 0);
+}
+
+// ============================================================================
+//  NASCIMENTO. A CPU escolhe slots livres e preenche um buffer pequeno de tamanho
+//  fixo; este kernel os grava. Nenhuma realocacao de ComputeBuffer, nenhum
+//  readback sincrono - era esse o custo que fazia o derrame engasgar.
+//
+//  Predicted nao e inicializado de proposito: PredictPositions reescreve o slot
+//  inteiro a partir de Positions no comeco do proximo passo.
+// ============================================================================
+// Tres linhas de 16 bytes, de proposito. Um struct que alterna float3 e uint deixa o
+// empacotamento a cargo das regras do HLSL, que nao sao as do C#: o layout casaria por
+// sorte, e um dia deixaria de casar sem nenhum erro de compilacao - so particulas
+// nascendo com velocidade e tempo de vida trocados.
+struct SpawnRecord
+{
+	float4 position;   // xyz = posicao, w = instante da morte
+	float4 velocity;   // xyz = velocidade, w livre
+	uint4 ids;         // x = substancia, y = slot, zw livres
+};
+StructuredBuffer<SpawnRecord> Spawns;
+int SpawnCount;
+
+// Ligado ao Velocities[READ] do momento do dispatch: e de la que o PredictPositions
+// do proximo passo vai ler a velocidade inicial.
+RWStructuredBuffer<float4> SpawnVelocities;
+
+#pragma kernel SpawnParticles
+
+[numthreads(THREADS, 1, 1)]
+void SpawnParticles(int id : SV_DispatchThreadID)
+{
+	if (id >= SpawnCount) return;
+
+	SpawnRecord s = Spawns[id];
+	uint slot = s.ids.y;
+
+	Positions[slot] = float4(s.position.xyz, 0);
+	SpawnVelocities[slot] = float4(s.velocity.xyz, 0);
+	SubstanceIds[slot] = s.ids.x;
+	DeathTimes[slot] = s.position.w;
+	States[slot] = 0.0;
+	Densities[slot] = 0;
+	Pressures[slot] = 0;
 }

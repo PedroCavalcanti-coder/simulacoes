@@ -1,0 +1,30 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b0f59e5534dcc5a4fa47d200c37646f1, type: 3}
+  m_Name: Liq_Water
+  m_EditorClassIdentifier: Assembly-CSharp::LabSpill.SpillLiquidDefinition
+  displayName: Agua
+  category: {fileID: 11400000, guid: 4d88ce4668d78ad44acd482c09d1064c, type: 2}
+  densityKgPerLiter: 1
+  color: {r: 0.08, g: 0.54, b: 0.72, a: 0.25}
+  murkColor: {r: 0.015, g: 0.16, b: 0.31, a: 1}
+  murkiness: 0.05
+  scale: 0.12
+  viscosity: 0
+  bubblesOpacity: 0.5
+  adjustmentSpeed: 1
+  boilingPointC: 100
+  vaporColor: {r: 0.94, g: 0.98, b: 1, a: 0.18}
+  steamRateAtMaximum: 5
+  steamStartIntensity: 0.65
+  streamColor: {r: 0.08, g: 0.54, b: 0.72, a: 1}
+  physicalViscosity: 1

@@ -1,4 +1,4 @@
-using UnityEngine;
+﻿using UnityEngine;
 
 namespace LabSpill
 {
@@ -46,18 +46,30 @@ namespace LabSpill
         [Range(0.005f, 0.5f)] public float densityThreshold = 0.01f;
 
         [Header("PBD simplificado")]
-        [Range(1, 3)] public int solverIterations = 1;
-        [Range(1, 3)] public int constraintIterations = 1;
+        [Tooltip("Emitir deixou de custar realocacao de buffer, entao o orcamento que " +
+            "isso liberava cabe aqui.")]
+        [Range(1, 3)] public int solverIterations = 2;
+        [Range(1, 4)] public int constraintIterations = 3;
         [Range(1, 4)] public int maxPhysicsStepsPerFrame = 1;
         [Min(0f)] public float viscosity = 0.004f;
         [Min(0.1f)] public float massScale = 1f;
         [Min(0f)] public float restDamping = 2f;
+        [Tooltip("Coesao entre vizinhos, em m/s2. E o que faz o jato sair como filete " +
+            "continuo em vez de esferas soltas. 0 desliga.")]
+        [Range(0f, 4f)] public float cohesion = 0.4f;
 
         [Header("Emissao e descarte")]
         [Range(1, 256)] public int maxParticlesPerFrame = 32;
-        [Range(0f, 0.1f)] public float emissionFlushInterval = 0.025f;
-        [Min(0f)] public float benchLifetimeMin = 10f;
-        [Min(0f)] public float benchLifetimeMax = 30f;
+        [Tooltip("Tempo de vida da particula. Vale em qualquer lugar: bancada, chao ou " +
+            "no ar. Sorteado dentro da faixa para a poca nao sumir toda de uma vez.")]
+        [Min(0f)] public float particleLifetimeMin = 8f;
+        [Min(0f)] public float particleLifetimeMax = 20f;
+
+        [Header("Colisao")]
+        [Tooltip("Intervalo (s) entre varreduras dos colisores da cena.")]
+        [Range(0.05f, 5f)] public float colliderRefreshInterval = 0.5f;
+        [Tooltip("Teto de colisores enviados a GPU por vez.")]
+        [Range(8, 256)] public int maxColliders = 64;
 
         void OnValidate()
         {
@@ -65,7 +77,7 @@ namespace LabSpill
             maxParticles = Mathf.Max(128, maxParticles);
             resolutionScale = Mathf.Clamp(resolutionScale, 0.5f, 1f);
             densityThreshold = Mathf.Clamp(densityThreshold, 0.005f, 0.5f);
-            benchLifetimeMax = Mathf.Max(benchLifetimeMin, benchLifetimeMax);
+            particleLifetimeMax = Mathf.Max(particleLifetimeMin, particleLifetimeMax);
         }
     }
 }

@@ -17,11 +17,18 @@ int Hash(float3 p)
 #define THREADS 128
 
 StructuredBuffer<float4> Particles;
-StructuredBuffer<float4> Boundary;
+
+// Estado por particula: 0 = viva, 1 = morta. Toda morta e estacionada no mesmo ponto
+// (o cemiterio), e o clamp do Hash empurraria todas para a MESMA celula real - a do
+// canto do dominio. Quem estivesse naquele canto varreria as milhares de mortas a
+// cada busca de vizinho. Por isso elas vao para uma celula reservada no fim do Table,
+// que nenhum indice calculado por Hash() alcanca.
+StructuredBuffer<float> States;
 
 int NumParticles;
 int TotalParticles;
-int TableSize;   // nº de celulas do Table (width*height*depth)
+int TableSize;   // nº de celulas do Table, ja incluindo a celula reservada
+int DeadCell;    // indice da celula reservada = TableSize - 1
 int ClearThreadStride;
 
 #pragma kernel HashParticles
@@ -34,13 +41,7 @@ void HashParticles(int id : SV_DispatchThreadID)
 
 	if (id < NumParticles)
 	{
-		index.x = Hash(Particles[id].xyz);
-		IndexMap[id] = index;
-	}
-	else if (id < TotalParticles)
-	{
-		int k = id - NumParticles;
-		index.x = Hash(Boundary[k].xyz);
+		index.x = (States[id] > 0.5) ? DeadCell : Hash(Particles[id].xyz);
 		IndexMap[id] = index;
 	}
 

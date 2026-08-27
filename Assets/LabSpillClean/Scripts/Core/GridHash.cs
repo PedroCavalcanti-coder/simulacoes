@@ -45,6 +45,7 @@ namespace PBDFluid
         // limparmos so por Groups(particulas), sobram celulas com lixo -> bounds
         // invalidos no Table -> loop de vizinhos ate ~2^31 -> travamento da GPU (TDR).
         private int m_cellCount;
+        private int m_deadCell;
         private int m_clearGroupsX;
         private int m_clearGroupsY;
 
@@ -71,7 +72,11 @@ namespace PBDFluid
             int height = (int)Bounds.size.y;
             int depth = (int)Bounds.size.z;
 
-            int size = width * height * depth;
+            // +1 celula reservada, no fim do Table, onde as particulas mortas sao
+            // penduradas. Hash() so produz indices dentro da grade real, entao nenhuma
+            // busca de vizinho chega nela. Ver o comentario em GridHash.compute.
+            int size = width * height * depth + 1;
+            m_deadCell = size - 1;
 
             m_cellCount = size;
             int clearGroups = size / THREADS;
@@ -123,43 +128,20 @@ namespace PBDFluid
             }
         }
 
-        public void Process(ComputeBuffer particles)
+        public void Process(ComputeBuffer particles, ComputeBuffer states)
         {
             if (particles.count != TotalParticles)
-                throw new ArgumentException("particles.Length != TotalParticles");
+                throw new ArgumentException("particles.count != TotalParticles");
 
             m_shader.SetInt("NumParticles", TotalParticles);
             m_shader.SetInt("TotalParticles", TotalParticles);
+            m_shader.SetInt("DeadCell", m_deadCell);
             m_shader.SetFloat("HashScale", InvCellSize);
             m_shader.SetVector("HashSize", Bounds.size);
             m_shader.SetVector("HashTranslate", Bounds.min);
 
             m_shader.SetBuffer(m_hashKernel, "Particles", particles);
-            m_shader.SetBuffer(m_hashKernel, "Boundary", particles); //unity 2018 complains if boundary not set in kernel
-            m_shader.SetBuffer(m_hashKernel, "IndexMap", IndexMap);
-
-            //Assign the particles hash to x and index to y.
-            m_shader.Dispatch(m_hashKernel, Groups, 1, 1);
-
-            MapTable();
-        }
-
-        public void Process(ComputeBuffer particles, ComputeBuffer boundary)
-        {
-            int numParticles = particles.count;
-            int numBoundary = boundary.count;
-
-            if (numParticles + numBoundary != TotalParticles)
-                throw new ArgumentException("numParticles + numBoundary != TotalParticles");
-
-            m_shader.SetInt("NumParticles", numParticles);
-            m_shader.SetInt("TotalParticles", TotalParticles);
-            m_shader.SetFloat("HashScale", InvCellSize);
-            m_shader.SetVector("HashSize", Bounds.size);
-            m_shader.SetVector("HashTranslate", Bounds.min);
-
-            m_shader.SetBuffer(m_hashKernel, "Particles", particles);
-            m_shader.SetBuffer(m_hashKernel, "Boundary", boundary);
+            m_shader.SetBuffer(m_hashKernel, "States", states);
             m_shader.SetBuffer(m_hashKernel, "IndexMap", IndexMap);
 
             //Assign the particles hash to x and index to y.

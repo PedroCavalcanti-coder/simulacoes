@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using LabLiquidVR;
 using LabSpill.Rendering;
 using PBDFluid;
@@ -9,6 +8,17 @@ using UnityEngine.Rendering;
 
 namespace LabSpill
 {
+    /// <summary>
+    /// Dono do fluido em particulas: um pool de capacidade fixa, o solver PBD e a
+    /// publicacao das superficies para a Renderer Feature.
+    ///
+    /// A versao anterior tratava o conjunto de particulas como uma lista que crescia:
+    /// emitir realocava dez ComputeBuffers e reconstruia o solver, quarenta vezes por
+    /// segundo; a vida das particulas era decidida por um GetData sincrono a cada 0,1 s;
+    /// e cada morte custava um SetData de um unico elemento. Aqui nada disso existe.
+    /// A CPU so escolhe slots livres e le, de forma assincrona, a lista de mortes que a
+    /// GPU produziu.
+    /// </summary>
     [DisallowMultipleComponent]
     public sealed class SpillFluidWorld : MonoBehaviour
     {
@@ -17,25 +27,8 @@ namespace LabSpill
         {
             public string key;
             public string name;
-            public Color particleColor;
             public Material material;
             public LiquidConfig config;
-        }
-
-        readonly struct ReceiverLiquidKey : IEquatable<ReceiverLiquidKey>
-        {
-            public readonly SpillLiquidContainer receiver;
-            public readonly int liquidIndex;
-            public ReceiverLiquidKey(SpillLiquidContainer receiver, int liquidIndex)
-            {
-                this.receiver = receiver;
-                this.liquidIndex = liquidIndex;
-            }
-            public bool Equals(ReceiverLiquidKey other) =>
-                receiver == other.receiver && liquidIndex == other.liquidIndex;
-            public override bool Equals(object obj) => obj is ReceiverLiquidKey other && Equals(other);
-            public override int GetHashCode() =>
-                ((receiver != null ? receiver.GetHashCode() : 0) * 397) ^ liquidIndex;
         }
 
         sealed class SurfaceView
@@ -44,48 +37,58 @@ namespace LabSpill
             public MeshRenderer renderer;
         }
 
-        struct RecentSpawn
+        struct PendingReadback
         {
-            public Vector3 position;
-            public float expiresAt;
+            public AsyncGPUReadbackRequest count;
+            public AsyncGPUReadbackRequest deaths;
         }
 
         [Header("Configuracao unica")]
         public SpillVisualSettings settings;
+
         [Tooltip("Material base PBDFluid/SSFSurface. O JSON do frasco aplica as cores.")]
         public Material surfaceMaterialTemplate;
 
+        [Header("Dominio")]
+        [Tooltip("Envolve todos os colisores da cena no Start e sobe um pouco, para o " +
+            "liquido ter espaco acima da bancada.")]
+        public bool autoFitDomain = true;
+
+        [Tooltip("Volume simulado, relativo a este objeto, quando autoFitDomain esta " +
+            "desligado. Fora dele o hash da GPU grampeia as posicoes.")]
+        public Bounds simulationBounds = new Bounds(Vector3.zero, new Vector3(6f, 4f, 6f));
+
         readonly List<Liquid> m_liquids = new List<Liquid>();
         readonly List<SurfaceView> m_views = new List<SurfaceView>();
-        readonly List<Vector3> m_queuePositions = new List<Vector3>();
-        readonly List<Vector3> m_queueVelocities = new List<Vector3>();
-        readonly List<Color> m_queueColors = new List<Color>();
-        readonly List<uint> m_queueSubstances = new List<uint>();
-        readonly List<RecentSpawn> m_recentSpawns = new List<RecentSpawn>();
-        readonly List<float> m_deathAt = new List<float>();
-        readonly List<Vector3> m_previousLifecyclePositions = new List<Vector3>();
-        readonly Dictionary<ReceiverLiquidKey, int> m_receiverAdds =
-            new Dictionary<ReceiverLiquidKey, int>();
-        readonly List<uint> m_particleSubstances = new List<uint>();
         readonly List<int> m_liveParticlesPerLiquid = new List<int>();
-        readonly List<FluidSolver.ColliderGPU> m_surfaceColliders =
-            new List<FluidSolver.ColliderGPU>();
+        readonly Queue<PendingReadback> m_pending = new Queue<PendingReadback>(4);
 
-        FluidBody m_fluid;
-        FluidBoundary m_boundary;
+        FluidPool m_pool;
         FluidSolver m_solver;
+        SpillColliderProvider m_colliders;
         Bounds m_domain;
-        SpillSurface[] m_surfaces;
+        Vector3 m_graveyard;
+
+        // Substancia por slot. A GPU esconde o slot morto pondo 0xFFFFFFFF no
+        // SubstanceIds, mas a CPU precisa lembrar o que havia ali para creditar o
+        // volume no frasco quando a morte for uma captura.
+        uint[] m_slotSubstance;
+
+        FluidSolver.SpawnGPU[] m_spawnScratch;
+        int m_spawnCount;
+
+        // Discos de emissao em pacote hexagonal, recalculados so quando o raio do
+        // gargalo muda. Substituem a rejeicao aleatoria O(n^2) que a emissao usava.
+        readonly List<Vector2> m_emissionDisc = new List<Vector2>(32);
+        float m_emissionDiscRadius = -1f;
+        int m_emissionDiscCursor;
+
         SpillLiquidContainer[] m_receivers;
-        float m_flushTimer;
-        float m_lifecycleTimer;
-        float m_compactTimer;
-        int m_liveParticleCount;
-        Vector4[] m_positions;
-        float[] m_states;
-        float[] m_stateScratch;
-        readonly Vector4[] m_deadPosition = new Vector4[1];
-        readonly float[] m_deadState = { 1f };
+        FluidSolver.PortGPU[] m_ports = new FluidSolver.PortGPU[8];
+        SpillLiquidContainer[] m_portOwners = new SpillLiquidContainer[8];
+        int m_portCount;
+        float m_sceneRefreshTimer;
+        bool m_deathsRequested;
 
         static readonly int SurfaceDepth = Shader.PropertyToID("_PBDFluidSurfaceDepth");
         static readonly int SurfaceNormal = Shader.PropertyToID("_PBDFluidSurfaceNormal");
@@ -93,10 +96,8 @@ namespace LabSpill
         static readonly int EdgeSoftness = Shader.PropertyToID("_EdgeSoftness");
 
         public SpillVisualSettings Settings => settings;
-        public int ParticleCount => m_fluid != null ? m_fluid.NumParticles : 0;
+        public int ParticleCount => m_pool != null ? m_pool.AliveCount : 0;
         public int LiquidCount => m_liquids.Count;
-        public ComputeBuffer PositionsBuffer => m_fluid != null ? m_fluid.Positions : null;
-        public ComputeBuffer StatesBuffer => m_fluid != null ? m_fluid.States : null;
         public Bounds SimulationBounds => m_domain;
 
         void Start()
@@ -107,125 +108,82 @@ namespace LabSpill
                 enabled = false;
                 return;
             }
-            Build();
-        }
 
-        void Build()
-        {
-            RefreshSceneCache();
-            m_domain = CalculateDomain();
-            float radius = settings.PhysicalRadius;
-            float diameter = radius * 2f;
-            Vector3 graveyard = m_domain.min + Vector3.down * 50f;
+            m_domain = autoFitDomain
+                ? FitDomainToScene()
+                : new Bounds(transform.position + simulationBounds.center, simulationBounds.size);
+            m_graveyard = m_domain.min + Vector3.down * 50f;
 
-            var boundarySource = new ParticlesFromList(diameter,
-                new[] { m_domain.min - Vector3.one * diameter });
-            m_boundary = new FluidBoundary(boundarySource, radius, 1000f,
-                Matrix4x4.identity, false);
-            m_boundary.Bounds = m_domain;
+            // O grid hash ordena Capacity elementos com bitonic sort, que tem teto proprio.
+            int capacity = Mathf.Min(settings.maxParticles, BitonicSort.MAX_ELEMENTS);
+            m_pool = new FluidPool(capacity, settings.PhysicalRadius, 1000f);
+            m_pool.ParticleMass *= settings.massScale;
+            m_pool.Viscosity = settings.viscosity;
+            m_pool.ParkAll(m_graveyard);
 
-            var source = new ParticlesFromList(diameter, new[] { graveyard });
-            m_fluid = new FluidBody(source, radius, 1000f, Matrix4x4.identity);
-            m_fluid.Bounds = m_domain;
-            m_fluid.ParticleMass *= settings.massScale;
-            m_fluid.Colors.SetData(new[] { Vector4.zero });
-            m_fluid.SubstanceIds.SetData(new[] { uint.MaxValue });
-            m_fluid.States.SetData(new[] { 1f });
-            m_liveParticleCount = 0;
-            for (int i = 0; i < m_liveParticlesPerLiquid.Count; i++)
-                m_liveParticlesPerLiquid[i] = 0;
-            m_deathAt.Clear();
-            m_deathAt.Add(-2f);
-            m_particleSubstances.Clear();
-            m_particleSubstances.Add(uint.MaxValue);
-            m_previousLifecyclePositions.Clear();
-            m_previousLifecyclePositions.Add(graveyard);
+            m_slotSubstance = new uint[m_pool.Capacity];
+            for (int i = 0; i < m_slotSubstance.Length; i++) m_slotSubstance[i] = uint.MaxValue;
 
-            CreateSolver(graveyard);
-            UploadSurfaceColliders();
-        }
+            m_spawnScratch = new FluidSolver.SpawnGPU[Mathf.Max(128, settings.maxParticlesPerFrame)];
 
-        void CreateSolver(Vector3 graveyard)
-        {
-            m_solver?.Dispose();
-            m_solver = new FluidSolver(m_fluid, m_boundary)
+            m_solver = new FluidSolver(m_pool, m_domain, m_spawnScratch.Length)
             {
-                Graveyard = graveyard,
+                Graveyard = m_graveyard,
                 SolverIterations = settings.solverIterations,
                 ConstraintIterations = settings.constraintIterations,
-                RestDamping = settings.restDamping
+                RestDamping = settings.restDamping,
+                Cohesion = settings.cohesion,
+                PortEntryDepth = settings.PhysicalRadius * 2f
             };
-            m_fluid.Viscosity = settings.viscosity;
-        }
 
-        Bounds CalculateDomain()
-        {
-            bool hasBounds = false;
-            Bounds result = new Bounds(transform.position, Vector3.one);
-            for (int i = 0; i < m_surfaces.Length; i++)
-            {
-                Collider col = m_surfaces[i] != null ? m_surfaces[i].Collider : null;
-                if (col == null) continue;
-                if (!hasBounds) { result = col.bounds; hasBounds = true; }
-                else result.Encapsulate(col.bounds);
-            }
-            for (int i = 0; i < m_receivers.Length; i++)
-            {
-                Renderer r = m_receivers[i] != null ? m_receivers[i].GetComponent<Renderer>() : null;
-                if (r == null) continue;
-                if (!hasBounds) { result = r.bounds; hasBounds = true; }
-                else result.Encapsulate(r.bounds);
-            }
-            result.Expand(new Vector3(0.5f, 0.5f, 0.5f));
-            return result;
-        }
-
-        void RefreshSceneCache()
-        {
-            m_surfaces = FindObjectsByType<SpillSurface>(FindObjectsInactive.Exclude);
-            m_receivers = FindObjectsByType<SpillLiquidContainer>(FindObjectsInactive.Exclude);
-        }
-
-        void UploadSurfaceColliders()
-        {
-            m_surfaceColliders.Clear();
-            for (int i = 0; i < m_surfaces.Length; i++)
-            {
-                SpillSurface surface = m_surfaces[i];
-                Collider col = surface != null ? surface.Collider : null;
-                if (col == null || !col.enabled) continue;
-                m_surfaceColliders.Add(ColliderToGpu(col));
-            }
-            m_solver.SetColliders(m_surfaceColliders.ToArray());
+            m_colliders = new SpillColliderProvider(settings.maxColliders);
+            RefreshSceneCache();
+            UploadColliders(force: true);
         }
 
         void Update()
         {
-            if (m_fluid == null) return;
-            m_flushTimer += Time.deltaTime;
-            if (m_queuePositions.Count > 0 &&
-                (settings.emissionFlushInterval <= 0f ||
-                 m_flushTimer >= settings.emissionFlushInterval))
-                FlushQueuedEmissions();
+            if (m_pool == null) return;
 
-            UpdateLifecycle();
-            m_compactTimer += Time.deltaTime;
-            if (m_compactTimer >= 1f)
+            m_sceneRefreshTimer += Time.deltaTime;
+            if (m_sceneRefreshTimer >= 0.5f)
             {
-                m_compactTimer = 0f;
-                CompactDead();
+                m_sceneRefreshTimer = 0f;
+                RefreshSceneCache();
             }
+
+            UploadColliders(force: false);
+            DrainReadbacks();
         }
 
         void FixedUpdate()
         {
             if (m_solver == null) return;
+
+            FlushSpawns();
+            UploadPorts();
+
+            // O contador so e zerado depois que o conteudo anterior ja foi PEDIDO. Zerar
+            // incondicionalmente perderia as mortes de um passo cuja leitura nao coube na
+            // fila, e slot cuja morte ninguem leu nunca volta para a lista livre: o pool
+            // secaria aos poucos ate o derrame parar.
+            if (m_deathsRequested)
+            {
+                m_solver.ResetDeaths();
+                m_deathsRequested = false;
+            }
+
             int steps = Mathf.Clamp(settings.maxPhysicsStepsPerFrame, 1, 4);
             float dt = Time.fixedDeltaTime / steps;
-            for (int i = 0; i < steps; i++) m_solver.StepPhysics(dt);
+            for (int i = 0; i < steps; i++)
+                m_solver.StepPhysics(dt, Time.time);
+
+            RequestDeathReadback();
         }
 
         void LateUpdate() => PublishSurfaces();
+
+        // ------------------------------------------------------------------ liquidos
 
         public int RegisterLiquid(string key, LiquidConfig config, Material template)
         {
@@ -236,6 +194,7 @@ namespace LabSpill
             Material source = template != null ? template : surfaceMaterialTemplate;
             Shader fallback = source == null ? Shader.Find("PBDFluid/SSFSurface") : null;
             if (source == null && fallback == null) return -1;
+
             Material material = source != null ? new Material(source) : new Material(fallback);
             material.name = "Spill - " + config.liquidName;
             material.hideFlags = HideFlags.HideAndDontSave;
@@ -245,13 +204,10 @@ namespace LabSpill
             if (material.HasProperty(EdgeSoftness))
                 material.SetFloat(EdgeSoftness, settings.edgeSoftness);
 
-            Color particle = config.bodyColor;
-            particle.a = 1f;
             m_liquids.Add(new Liquid
             {
                 key = key,
                 name = config.liquidName,
-                particleColor = particle,
                 material = material,
                 config = LiquidConfig.Copy(config)
             });
@@ -259,16 +215,25 @@ namespace LabSpill
             return m_liquids.Count - 1;
         }
 
+        // ------------------------------------------------------------------ emissao
+
+        /// <summary>
+        /// Reserva slots e monta as particulas de um jato. Devolve quantas foram aceitas;
+        /// o emissor devolve ao frasco o volume que sobrou.
+        ///
+        /// A distribuicao e deterministica: as particulas ocupam um disco hexagonal na
+        /// boca e se espalham ao longo da distancia que o jato percorreu desde a ultima
+        /// emissao. Nao ha mais sorteio com rejeicao, que antes gastava ate 288 tentativas
+        /// por particula e ainda assim podia empilhar duas no mesmo ponto.
+        /// </summary>
         public int QueueJet(Vector3 origin, Vector3 velocity, int count, int liquidIndex,
             float neckRadius, Vector3 mouthNormal)
         {
-            if (m_fluid == null || liquidIndex < 0 || liquidIndex >= m_liquids.Count || count <= 0)
+            if (m_pool == null || liquidIndex < 0 || liquidIndex >= m_liquids.Count || count <= 0)
                 return 0;
-            int capacity = Mathf.Min(settings.maxParticles, BitonicSort.MAX_ELEMENTS);
-            int available = capacity - m_fluid.NumParticles - m_boundary.NumParticles -
-                m_queuePositions.Count;
-            int requested = Mathf.Clamp(count, 0, Mathf.Max(0, available));
-            if (requested == 0) return 0;
+
+            int room = Mathf.Min(count, m_spawnScratch.Length - m_spawnCount);
+            if (room <= 0) return 0;
 
             Vector3 direction = velocity.sqrMagnitude > 1e-6f ? velocity.normalized : Vector3.down;
             Vector3 normal = mouthNormal.sqrMagnitude > 1e-6f ? mouthNormal.normalized : -direction;
@@ -276,295 +241,237 @@ namespace LabSpill
                 ? Vector3.right : Vector3.up;
             Vector3 tangent = Vector3.Cross(normal, reference).normalized;
             Vector3 bitangent = Vector3.Cross(normal, tangent).normalized;
-            float physicalRadius = settings.PhysicalRadius;
-            float spacing = physicalRadius * 2.1f;
-            float usableRadius = Mathf.Max(0f, neckRadius - physicalRadius);
+
+            float radius = settings.PhysicalRadius;
+            float usableRadius = Mathf.Max(0f, neckRadius - radius);
+            BuildEmissionDisc(usableRadius, radius);
+
+            // Comprimento de jato que a boca "varreu" desde o ultimo frame. Espalhar as
+            // particulas por ele e o que produz um filete continuo em vez de um bloco
+            // de particulas nascendo sobrepostas no mesmo ponto.
+            float travel = Mathf.Max(radius * 2f, velocity.magnitude * Time.deltaTime);
             float now = Time.time;
-            for (int i = m_recentSpawns.Count - 1; i >= 0; i--)
-                if (m_recentSpawns[i].expiresAt <= now) m_recentSpawns.RemoveAt(i);
 
             int accepted = 0;
-            for (int i = 0; i < requested; i++)
+            for (int i = 0; i < room; i++)
             {
-                Vector3 candidate = origin;
-                bool found = false;
-                for (int layer = 0; layer < 12 && !found; layer++)
-                {
-                    for (int attempt = 0; attempt < 24; attempt++)
-                    {
-                        float radial = usableRadius * Mathf.Sqrt(UnityEngine.Random.value);
-                        float angle = UnityEngine.Random.value * Mathf.PI * 2f;
-                        Vector3 disk = tangent * (Mathf.Cos(angle) * radial) +
-                            bitangent * (Mathf.Sin(angle) * radial);
-                        candidate = origin + disk + direction * (layer * spacing);
-                        if (IsSeparated(candidate, spacing)) { found = true; break; }
-                    }
-                }
-                // Se o disco estiver lotado, prolonga o jato em camadas. Nunca
-                // aceita a ultima tentativa aleatoria se ela estiver sobreposta.
-                for (int layer = 12; layer < 64 && !found; layer++)
-                {
-                    candidate = origin + direction * (layer * spacing);
-                    found = IsSeparated(candidate, spacing);
-                }
-                if (!found) break;
-                m_queuePositions.Add(candidate);
-                m_queueVelocities.Add(velocity);
-                m_queueColors.Add(m_liquids[liquidIndex].particleColor);
-                m_queueSubstances.Add((uint)liquidIndex);
-                m_recentSpawns.Add(new RecentSpawn
-                {
-                    position = candidate,
-                    expiresAt = now + 0.15f
-                });
+                if (!m_pool.TryAllocate(out int slot)) break;
+
+                Vector2 disc = m_emissionDisc[m_emissionDiscCursor % m_emissionDisc.Count];
+                m_emissionDiscCursor++;
+
+                float along = (i + 0.5f) / room * travel;
+                Vector3 position = origin
+                    + tangent * disc.x + bitangent * disc.y
+                    + direction * along;
+
+                m_slotSubstance[slot] = (uint)liquidIndex;
+                m_spawnScratch[m_spawnCount++] = new FluidSolver.SpawnGPU(
+                    position,
+                    velocity,
+                    now + UnityEngine.Random.Range(
+                        settings.particleLifetimeMin, settings.particleLifetimeMax),
+                    (uint)liquidIndex,
+                    (uint)slot);
+                m_liveParticlesPerLiquid[liquidIndex]++;
                 accepted++;
             }
+
             return accepted;
         }
 
-        bool IsSeparated(Vector3 candidate, float spacing)
+        void BuildEmissionDisc(float usableRadius, float particleRadius)
         {
-            float minSq = spacing * spacing;
-            for (int i = 0; i < m_queuePositions.Count; i++)
-                if ((m_queuePositions[i] - candidate).sqrMagnitude < minSq) return false;
-            for (int i = 0; i < m_recentSpawns.Count; i++)
-                if ((m_recentSpawns[i].position - candidate).sqrMagnitude < minSq) return false;
-            return true;
-        }
+            if (Mathf.Abs(usableRadius - m_emissionDiscRadius) < 1e-5f && m_emissionDisc.Count > 0)
+                return;
 
-        public bool FlushQueuedEmissions()
-        {
-            if (m_queuePositions.Count == 0 || m_fluid == null) return false;
-            int added = m_queuePositions.Count;
-            m_fluid.Append(m_queuePositions.ToArray(), m_queueVelocities.ToArray(),
-                m_queueColors.ToArray(), m_queueSubstances.ToArray());
-            for (int i = 0; i < added; i++)
+            m_emissionDiscRadius = usableRadius;
+            m_emissionDisc.Clear();
+            m_emissionDisc.Add(Vector2.zero);
+
+            float spacing = particleRadius * 2f;
+            for (int ring = 1; ring * spacing <= usableRadius; ring++)
             {
-                m_previousLifecyclePositions.Add(m_queuePositions[i]);
-                uint substance = m_queueSubstances[i];
-                m_particleSubstances.Add(substance);
-                if (substance < m_liveParticlesPerLiquid.Count)
-                    m_liveParticlesPerLiquid[(int)substance]++;
+                int points = ring * 6;
+                float ringRadius = ring * spacing;
+                for (int p = 0; p < points; p++)
+                {
+                    float angle = p / (float)points * Mathf.PI * 2f;
+                    m_emissionDisc.Add(new Vector2(
+                        Mathf.Cos(angle) * ringRadius, Mathf.Sin(angle) * ringRadius));
+                }
             }
-            m_queuePositions.Clear();
-            m_queueVelocities.Clear();
-            m_queueColors.Clear();
-            m_queueSubstances.Clear();
-            for (int i = 0; i < added; i++) m_deathAt.Add(-1f);
-            m_liveParticleCount += added;
-            m_flushTimer = 0f;
-            Vector3 graveyard = m_solver.Graveyard;
-            CreateSolver(graveyard);
-            UploadSurfaceColliders();
-            return true;
         }
 
-        void UpdateLifecycle()
+        void FlushSpawns()
         {
-            m_lifecycleTimer += Time.deltaTime;
-            if (m_lifecycleTimer < 0.1f || m_fluid == null) return;
-            m_lifecycleTimer = 0f;
-            RefreshSceneCache();
+            if (m_spawnCount == 0) return;
+            m_solver.Spawn(m_spawnScratch, m_spawnCount);
+            m_spawnCount = 0;
+        }
 
-            int count = m_fluid.NumParticles;
-            EnsureArray(ref m_positions, count);
-            EnsureArray(ref m_states, count);
-            while (m_deathAt.Count < count) m_deathAt.Add(-1f);
-            m_fluid.Positions.GetData(m_positions);
-            m_fluid.States.GetData(m_states);
-            m_liveParticleCount = 0;
-            for (int i = 0; i < m_liveParticlesPerLiquid.Count; i++)
-                m_liveParticlesPerLiquid[i] = 0;
-            for (int i = 0; i < count; i++)
-                if (m_states[i] <= 0.5f)
-                {
-                    m_liveParticleCount++;
-                    if (i < m_particleSubstances.Count)
-                    {
-                        uint substance = m_particleSubstances[i];
-                        if (substance < m_liveParticlesPerLiquid.Count)
-                            m_liveParticlesPerLiquid[(int)substance]++;
-                    }
-                }
-            while (m_previousLifecyclePositions.Count < count)
-                m_previousLifecyclePositions.Add(m_positions[m_previousLifecyclePositions.Count]);
-            m_receiverAdds.Clear();
-            float now = Time.time;
+        // ------------------------------------------------------------------ mortes
 
-            for (int i = 0; i < count; i++)
+        void RequestDeathReadback()
+        {
+            // Sem pedido novo enquanto a fila estiver cheia. Como o reset depende deste
+            // sinalizador, pular aqui apenas adia: as mortes se acumulam no mesmo buffer
+            // (que tem Capacity entradas, e nenhuma particula morre duas vezes) e a
+            // proxima leitura leva todas.
+            if (m_pending.Count >= 8) return;
+
+            m_pending.Enqueue(new PendingReadback
             {
-                if (m_states[i] > 0.5f) continue;
-                Vector3 position = m_positions[i];
-                Vector3 previous = m_previousLifecyclePositions[i];
-                SpillLiquidContainer receiver;
-                if (TryFindReceiver(previous, position, out receiver))
-                {
-                    int liquidIndex = i < m_particleSubstances.Count
-                        ? (int)m_particleSubstances[i]
-                        : -1;
-                    ReceiverLiquidKey key = new ReceiverLiquidKey(receiver, liquidIndex);
-                    int received;
-                    m_receiverAdds.TryGetValue(key, out received);
-                    m_receiverAdds[key] = received + 1;
-                    MarkDead(i);
-                    continue;
-                }
-                m_previousLifecyclePositions[i] = position;
-                if (m_deathAt[i] >= 0f)
-                {
-                    if (now >= m_deathAt[i]) MarkDead(i);
-                    continue;
-                }
-                if (IsOnBench(position))
-                    m_deathAt[i] = now + UnityEngine.Random.Range(
-                        settings.benchLifetimeMin, settings.benchLifetimeMax);
-            }
-
-            foreach (var pair in m_receiverAdds)
-                if (pair.Key.receiver != null && pair.Key.liquidIndex >= 0 &&
-                    pair.Key.liquidIndex < m_liquids.Count)
-                    pair.Key.receiver.ReceiveLiquid(
-                        m_liquids[pair.Key.liquidIndex].config,
-                        pair.Value * settings.millilitersPerParticle);
+                count = AsyncGPUReadback.Request(m_solver.CopyDeathCount()),
+                deaths = AsyncGPUReadback.Request(m_pool.Deaths)
+            });
+            m_deathsRequested = true;
         }
 
-        bool TryFindReceiver(Vector3 previous, Vector3 position,
-            out SpillLiquidContainer receiver)
+        void DrainReadbacks()
         {
-            receiver = null;
+            while (m_pending.Count > 0)
+            {
+                PendingReadback pending = m_pending.Peek();
+                if (!pending.count.done || !pending.deaths.done) return;
+                m_pending.Dequeue();
+
+                if (pending.count.hasError || pending.deaths.hasError) continue;
+
+                int dead = (int)pending.count.GetData<uint>()[0];
+                if (dead <= 0) continue;
+
+                var records = pending.deaths.GetData<uint>();
+                int available = records.Length / 2;
+                dead = Mathf.Min(dead, available);
+
+                for (int i = 0; i < dead; i++)
+                {
+                    int slot = (int)records[i * 2];
+                    uint portPlusOne = records[i * 2 + 1];
+                    ReleaseParticle(slot, portPlusOne);
+                }
+            }
+        }
+
+        void ReleaseParticle(int slot, uint portPlusOne)
+        {
+            if (slot < 0 || slot >= m_slotSubstance.Length) return;
+
+            uint substance = m_slotSubstance[slot];
+            if (substance == uint.MaxValue) return;   // ja devolvido por uma leitura anterior
+
+            m_slotSubstance[slot] = uint.MaxValue;
+            m_pool.ReleaseSlot(slot);
+            if (substance < m_liveParticlesPerLiquid.Count)
+                m_liveParticlesPerLiquid[(int)substance] =
+                    Mathf.Max(0, m_liveParticlesPerLiquid[(int)substance] - 1);
+
+            if (portPlusOne == 0) return;
+
+            int portIndex = (int)portPlusOne - 1;
+            if (portIndex < 0 || portIndex >= m_portCount) return;
+
+            SpillLiquidContainer receiver = m_portOwners[portIndex];
+            if (receiver == null || substance >= m_liquids.Count) return;
+
+            receiver.ReceiveLiquid(m_liquids[(int)substance].config, settings.millilitersPerParticle);
+        }
+
+        // ------------------------------------------------------------------ cena
+
+        /// <summary>
+        /// Envolve todos os colisores da cena. Substitui o calculo antigo, que somava os
+        /// colisores marcados como bancada ou chao - marcadores que deixaram de existir
+        /// quando a particula passou a colidir com tudo.
+        /// </summary>
+        Bounds FitDomainToScene()
+        {
+            var colliders = FindObjectsByType<Collider>(FindObjectsInactive.Exclude);
+            bool any = false;
+            Bounds result = new Bounds(transform.position, Vector3.one);
+
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                Collider col = colliders[i];
+                if (col == null || !col.enabled || col.isTrigger) continue;
+
+                if (!any) { result = col.bounds; any = true; }
+                else result.Encapsulate(col.bounds);
+            }
+
+            if (!any)
+                return new Bounds(transform.position + simulationBounds.center, simulationBounds.size);
+
+            // Folga lateral para respingo, e mais no topo: e para onde o jato sobe quando
+            // se despeja de um frasco erguido acima da bancada.
+            result.Expand(new Vector3(0.5f, 0.5f, 0.5f));
+            result.Encapsulate(new Vector3(result.center.x, result.max.y + 1f, result.center.z));
+            return result;
+        }
+
+        void RefreshSceneCache()
+        {
+            m_receivers = FindObjectsByType<SpillLiquidContainer>(FindObjectsInactive.Exclude);
+        }
+
+        void UploadColliders(bool force)
+        {
+            if (m_colliders.Refresh(m_domain, settings.colliderRefreshInterval, force))
+                m_solver.SetColliders(m_colliders.Array, m_colliders.Count);
+        }
+
+        void UploadPorts()
+        {
+            m_portCount = 0;
+            if (m_receivers == null) return;
+
+            float radius = settings.PhysicalRadius;
+            float visualPad = Mathf.Max(0f, radius * settings.visualRadiusScale - radius);
+
             for (int i = 0; i < m_receivers.Length; i++)
             {
                 SpillLiquidContainer candidate = m_receivers[i];
-                if (candidate == null || !candidate.isActiveAndEnabled ||
-                    candidate.currentVolumeML >= candidate.capacityML -
+                if (candidate == null || !candidate.isActiveAndEnabled) continue;
+
+                // Frasco cheio nao vira porto: sem isso a particula sumiria na boca sem
+                // virar volume nenhum.
+                if (candidate.currentVolumeML >= candidate.capacityML -
                     settings.millilitersPerParticle * 0.5f) continue;
-                Vector3 center, normal;
-                float openingRadius;
-                if (!candidate.TryGetOpening(out center, out normal, out openingRadius) ||
-                    Vector3.Dot(normal, Vector3.up) < 0.55f) continue;
-                Vector3 delta = position - center;
-                float axial = Vector3.Dot(delta, normal);
-                Vector3 radial = delta - normal * axial;
-                float captureDepth = Mathf.Max(0.08f, openingRadius * 2.5f);
-                // O SSF desenha a gota maior que o raio PBD. A captura acompanha
-                // essa silhueta: se a gota visual entrou no gargalo, o volume entra.
-                float physicalRadius = settings.PhysicalRadius;
-                float visualRadius = physicalRadius * settings.visualRadiusScale;
-                float usable = Mathf.Max(0f,
-                    openingRadius + Mathf.Max(0f, visualRadius - physicalRadius));
-                if (radial.sqrMagnitude <= usable * usable &&
-                    axial <= physicalRadius * 2f && axial >= -captureDepth)
+
+                if (!candidate.TryGetOpening(out Vector3 center, out Vector3 normal, out float openingRadius))
+                    continue;
+                if (Vector3.Dot(normal, Vector3.up) < 0.55f) continue;
+
+                if (m_portCount >= m_ports.Length)
                 {
-                    receiver = candidate;
-                    return true;
+                    System.Array.Resize(ref m_ports, m_ports.Length * 2);
+                    System.Array.Resize(ref m_portOwners, m_portOwners.Length * 2);
                 }
 
-                // A leitura de vida ocorre a cada 0,1 s. Um jato rapido pode
-                // atravessar todo o gargalo entre duas leituras; cruza-se o
-                // segmento anterior/atual com o plano circular da abertura.
-                float previousAxial = Vector3.Dot(previous - center, normal);
-                float denominator = previousAxial - axial;
-                if (previousAxial >= 0f && axial <= 0f &&
-                    Mathf.Abs(denominator) > 1e-6f)
+                m_ports[m_portCount] = new FluidSolver.PortGPU
                 {
-                    float t = Mathf.Clamp01(previousAxial / denominator);
-                    Vector3 crossing = Vector3.Lerp(previous, position, t) - center;
-                    Vector3 crossingRadial = crossing - normal * Vector3.Dot(crossing, normal);
-                    if (crossingRadial.sqrMagnitude <= usable * usable)
-                    {
-                        receiver = candidate;
-                        return true;
-                    }
-                }
+                    center = center,
+                    normal = normal,
+                    // O SSF desenha a gota maior que o raio fisico. A captura acompanha
+                    // essa silhueta: se a gota visual entrou no gargalo, o volume entra.
+                    radius = openingRadius + visualPad,
+                    captureDepth = Mathf.Max(0.08f, openingRadius * 2.5f)
+                };
+                m_portOwners[m_portCount] = candidate;
+                m_portCount++;
             }
-            return false;
+
+            m_solver.SetPorts(m_ports, m_portCount);
         }
 
-        bool IsOnBench(Vector3 position)
-        {
-            for (int i = 0; i < m_surfaces.Length; i++)
-            {
-                SpillSurface surface = m_surfaces[i];
-                if (surface == null || surface.kind != SpillSurfaceKind.Bench) continue;
-                Bounds b = surface.Collider.bounds;
-                float r = settings.PhysicalRadius;
-                if (position.x < b.min.x - r || position.x > b.max.x + r ||
-                    position.z < b.min.z - r || position.z > b.max.z + r) continue;
-                if (position.y >= b.max.y - r * 3f &&
-                    position.y <= b.max.y + Mathf.Max(0.08f, r * 12f)) return true;
-            }
-            return false;
-        }
-
-        void MarkDead(int index)
-        {
-            Vector3 g = m_solver.Graveyard;
-            m_deadPosition[0] = new Vector4(g.x, g.y, g.z, 0f);
-            m_fluid.Positions.SetData(m_deadPosition, 0, index, 1);
-            m_fluid.States.SetData(m_deadState, 0, index, 1);
-            if (index < m_states.Length) m_states[index] = 1f;
-            m_liveParticleCount = Mathf.Max(0, m_liveParticleCount - 1);
-            if (index < m_particleSubstances.Count)
-            {
-                uint substance = m_particleSubstances[index];
-                if (substance < m_liveParticlesPerLiquid.Count)
-                    m_liveParticlesPerLiquid[(int)substance] = Mathf.Max(0,
-                        m_liveParticlesPerLiquid[(int)substance] - 1);
-            }
-            m_deathAt[index] = -2f;
-            if (index < m_previousLifecyclePositions.Count)
-                m_previousLifecyclePositions[index] = g;
-        }
-
-        void CompactDead()
-        {
-            int count = m_fluid.NumParticles;
-            EnsureArray(ref m_stateScratch, count);
-            m_fluid.States.GetData(m_stateScratch);
-            int dead = 0;
-            for (int i = 0; i < count; i++) if (m_stateScratch[i] > 0.5f) dead++;
-            int alive = count - dead;
-            m_liveParticleCount = alive;
-            if (dead == 0 || (alive > 0 && dead < 32) || (alive == 0 && count == 1)) return;
-            var survivingTimes = new List<float>(alive);
-            var survivingPositions = new List<Vector3>(alive);
-            var survivingSubstances = new List<uint>(alive);
-            for (int i = 0; i < count; i++)
-                if (m_stateScratch[i] <= 0.5f)
-                {
-                    survivingTimes.Add(i < m_deathAt.Count ? m_deathAt[i] : -1f);
-                    survivingPositions.Add(i < m_previousLifecyclePositions.Count
-                        ? m_previousLifecyclePositions[i] : Vector3.zero);
-                    survivingSubstances.Add(i < m_particleSubstances.Count
-                        ? m_particleSubstances[i] : uint.MaxValue);
-                }
-            Vector3 graveyard = m_solver.Graveyard;
-            if (!m_fluid.CompactDead()) return;
-            m_deathAt.Clear();
-            m_previousLifecyclePositions.Clear();
-            m_particleSubstances.Clear();
-            if (alive == 0)
-            {
-                // ComputeBuffers nao aceitam tamanho zero. Mantemos uma unica
-                // sentinela morta, fora da cena, sem consumir capacidade util.
-                m_deathAt.Add(-2f);
-                m_previousLifecyclePositions.Add(graveyard);
-                m_particleSubstances.Add(uint.MaxValue);
-            }
-            else
-            {
-                m_deathAt.AddRange(survivingTimes);
-                m_previousLifecyclePositions.AddRange(survivingPositions);
-                m_particleSubstances.AddRange(survivingSubstances);
-            }
-            CreateSolver(graveyard);
-            UploadSurfaceColliders();
-        }
+        // ------------------------------------------------------------------ render
 
         void PublishSurfaces()
         {
             while (m_views.Count < m_liquids.Count)
                 m_views.Add(new SurfaceView());
+
             for (int i = 0; i < m_views.Count; i++)
             {
                 SurfaceView view = m_views[i];
@@ -573,17 +480,16 @@ namespace LabSpill
                 view.renderer.transform.SetPositionAndRotation(m_domain.center, Quaternion.identity);
                 view.renderer.transform.localScale = m_domain.size;
                 view.renderer.sharedMaterial = liquid.material;
-                bool hasLiquidParticles = m_fluid != null &&
-                    i < m_liveParticlesPerLiquid.Count &&
-                    m_liveParticlesPerLiquid[i] > 0;
-                view.renderer.enabled = hasLiquidParticles;
-                view.entry.Positions = m_fluid != null ? m_fluid.Positions : null;
-                view.entry.SubstanceIds = m_fluid != null ? m_fluid.SubstanceIds : null;
+
+                bool hasParticles = m_pool != null && m_liveParticlesPerLiquid[i] > 0;
+                view.renderer.enabled = hasParticles;
+                view.entry.Positions = m_pool?.Positions;
+                view.entry.SubstanceIds = m_pool?.SubstanceIds;
                 view.entry.SubstanceIndex = i;
                 view.entry.FilterBySubstance = true;
-                // Count zero impede que a Renderer Feature agende depth/blur/normal
-                // para a sentinela ou para um lote completamente morto.
-                view.entry.Count = hasLiquidParticles ? m_fluid.NumParticles : 0;
+                // Slot morto carrega SubstanceIds 0xFFFFFFFF, que nunca casa com o
+                // indice de nenhum liquido: o vertex shader do SSF descarta sozinho.
+                view.entry.Count = hasParticles ? m_pool.Capacity : 0;
                 view.entry.Radius = settings.PhysicalRadius;
                 view.entry.WorldBounds = m_domain;
                 view.entry.SurfaceRenderer = view.renderer;
@@ -639,70 +545,6 @@ namespace LabSpill
             if (material.HasProperty(property)) material.SetFloat(property, value);
         }
 
-        static FluidSolver.ColliderGPU ColliderToGpu(Collider col)
-        {
-            Transform tr = col.transform;
-            Vector3 scale = tr.lossyScale;
-            Vector3 abs = new Vector3(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
-            var gpu = new FluidSolver.ColliderGPU
-            {
-                axisX = tr.right,
-                axisY = tr.up,
-                axisZ = tr.forward,
-                velocity = Vector3.zero
-            };
-            if (col is SphereCollider sphere)
-            {
-                gpu.type = 0;
-                gpu.center = tr.TransformPoint(sphere.center);
-                gpu.radius = sphere.radius * Mathf.Max(abs.x, Mathf.Max(abs.y, abs.z));
-            }
-            else if (col is CapsuleCollider capsule)
-            {
-                gpu.type = 2;
-                gpu.center = tr.TransformPoint(capsule.center);
-                if (capsule.direction == 0)
-                {
-                    gpu.axisY = tr.right; gpu.axisX = tr.up; gpu.axisZ = tr.forward;
-                }
-                else if (capsule.direction == 2)
-                {
-                    gpu.axisY = tr.forward; gpu.axisX = tr.right; gpu.axisZ = tr.up;
-                }
-                float axisScale = capsule.direction == 0 ? abs.x :
-                    capsule.direction == 1 ? abs.y : abs.z;
-                float radialScale = capsule.direction == 0 ? Mathf.Max(abs.y, abs.z) :
-                    capsule.direction == 1 ? Mathf.Max(abs.x, abs.z) : Mathf.Max(abs.x, abs.y);
-                gpu.radius = capsule.radius * radialScale;
-                gpu.halfExt = new Vector3(0f,
-                    Mathf.Max(0f, capsule.height * 0.5f * axisScale - gpu.radius), 0f);
-            }
-            else
-            {
-                BoxCollider box = col as BoxCollider;
-                gpu.type = 1;
-                if (box != null)
-                {
-                    gpu.center = tr.TransformPoint(box.center);
-                    gpu.halfExt = Vector3.Scale(box.size, abs) * 0.5f;
-                }
-                else
-                {
-                    gpu.center = col.bounds.center;
-                    gpu.axisX = Vector3.right;
-                    gpu.axisY = Vector3.up;
-                    gpu.axisZ = Vector3.forward;
-                    gpu.halfExt = col.bounds.extents;
-                }
-            }
-            return gpu;
-        }
-
-        static void EnsureArray<T>(ref T[] array, int count)
-        {
-            if (array == null || array.Length != count) array = new T[count];
-        }
-
         void OnDestroy()
         {
             for (int i = 0; i < m_views.Count; i++)
@@ -712,9 +554,15 @@ namespace LabSpill
             }
             for (int i = 0; i < m_liquids.Count; i++)
                 if (m_liquids[i].material != null) Destroy(m_liquids[i].material);
+
             m_solver?.Dispose();
-            m_fluid?.Dispose();
-            m_boundary?.Dispose();
+            m_pool?.Dispose();
+        }
+
+        void OnDrawGizmosSelected()
+        {
+            Gizmos.color = new Color(0.35f, 0.8f, 1f, 0.5f);
+            Gizmos.DrawWireCube(transform.position + simulationBounds.center, simulationBounds.size);
         }
     }
 }

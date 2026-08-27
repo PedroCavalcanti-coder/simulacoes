@@ -66,8 +66,8 @@ namespace PBDFluid
 
         public void Dispose()
         {
-            CBUtility.Release(ref m_buffer1);
-            CBUtility.Release(ref m_buffer2);
+            m_buffer1?.Release(); m_buffer1 = null;
+            m_buffer2?.Release(); m_buffer2 = null;
         }
 
         public void Sort(ComputeBuffer input)

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 namespace LabSpill.Rendering
@@ -13,8 +13,6 @@ namespace LabSpill.Rendering
             public bool FilterBySubstance = true;
             public int Count;
             public float Radius;
-            public Mesh ParticleMesh;
-            public ComputeBuffer Args;
             public Bounds WorldBounds;
             public MeshRenderer SurfaceRenderer;
             public RenderTexture SurfaceDepth;

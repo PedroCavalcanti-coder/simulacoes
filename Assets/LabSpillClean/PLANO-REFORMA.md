@@ -9,9 +9,23 @@ nas tarefas marcadas **[S]**.
 - **[C] Complexo** — projeto novo de código/GPU. Não delegar.
 
 **Decisões já tomadas (não reabrir)**
-1. O líquido dentro do frasco passa a ser **LiquidVolumePro (detail = Multiple) + LiquidFX.FlaskVolume**. Todo o caminho de render/volume do `SpillLiquidContainer` morre.
+1. O líquido dentro do frasco passa a ser **LiquidVolumePro (detail = Multiple) + FlaskVolume**. Todo o caminho de render/volume do `SpillLiquidContainer` morre.
 2. Os líquidos viram **ScriptableObject** (`LiquidDefinition` + `LiquidCategory`), com conversor one-shot a partir dos 4 JSONs atuais.
 3. A física de partículas é **reescrita com pool de capacidade fixa na GPU**.
+
+**Restrição de pastas (2026-08-27)**
+`Assets/LiquidFX` e `Assets/LiquidVolumePro` são material de exemplo e **não podem ser
+alterados**. Todo código novo ou modificado mora em `Assets/LabSpillClean`. O que precisar
+ser mexido é **copiado** para lá com nome próprio.
+
+Leitura em vigor (corrigir se estiver errada):
+- `LiquidVolumePro` é **usado como está**, sem cópia — colocar um `LiquidVolume` no frasco não
+  altera a pasta. Só vira cópia se aparecer necessidade de patch no asset.
+- `LiquidFX` **será copiado**, porque a Fase 2.2 precisa estender `LiquidDefinition`. Cinco
+  arquivos vão para `LabSpillClean/Scripts/Liquid/` com namespace `LabSpill`:
+  `LiquidDefinition`, `LiquidCategory`, `FlaskVolume`, `ILiquidContainer`,
+  `LiquidContainerRegistry` — renomeados com prefixo `Spill` (ex.: `SpillFlaskVolume`) para não
+  colidir com os originais, que continuam compilando no projeto.
 
 ---
 
@@ -64,7 +78,7 @@ Ler antes de tocar em `liquidLayers`. Os dois que mais derrubam implementação:
 
 ### 0.4 O que se aproveita de LiquidFX
 
-`FlaskVolume` já é a ponte mL ↔ LVP e já implementa o que precisamos:
+`FlaskVolume` (a ser copiado, ver 2.0) já é a ponte mL ↔ LVP e já implementa o que precisamos:
 `AddLayeredML`, `RemoveTopML(out LiquidDefinition)`, `IsAbovePort`, `PortCentreWorld`,
 `PortRadius`, `SurfaceWorldY`, `TopLiquid`, `EvaluateTiltFlowMLPerSecond`.
 
@@ -79,28 +93,36 @@ Ou seja: dá para apagar todo o VFX de derramamento do LiquidFX sem tocar no que
 Objetivo: o projeto compila e roda igual ao de hoje, com menos código.
 Fazer commit ao fim de cada bloco.
 
-### 1.1 [S] Apagar arquivos órfãos (zero referências)
+**Status: 1.1, 1.2, 1.3, 1.5 e 1.6 fechadas** no commit `refactor(LabSpillClean): remove dead
+code from the fluid path`. Falta só a 1.4, adiada de propósito (ver abaixo).
 
-Verificado: nenhum `.cs`, `.mat` ou a cena referencia estes arquivos.
+### 1.1 [S] ✅ Apagar arquivos órfãos (zero referências)
+
+Verificado por busca de GUID em todo o `Assets/` — busca por *nome* não serve, porque `.mat`
+referencia shader por GUID.
 
 ```
 Assets/LabSpillClean/Resources/ComputeVolume.compute
 Assets/LabSpillClean/Shaders/LiquidGlass.shader
 Assets/LabSpillClean/Shaders/SolidLiquidLOD.shader
+Assets/LabSpillClean/Materials/Flask Liquid.mat     <- achado durante a execução
 ```
+
+`Flask Liquid.mat` não era referenciado por nada e era o **único** usuário do
+`LiquidGlass.shader`: o par inteiro era órfão.
 
 Apagar também o `.meta` de cada um. **Não** apagar `SpillBubbleParticle.shader` nem
 `SpillSteamParticle.shader`: são carregados por nome em [SpillBurner.cs:313](Scripts/Runtime/SpillBurner.cs:313).
 
 Critério de aceite: Unity recompila sem erro e sem novo warning.
 
-### 1.2 [S] Remover as sobrecargas mortas de `Append`
+### 1.2 [S] ✅ Remover as sobrecargas mortas de `Append`
 
-Em [FluidBody.cs](Scripts/Core/FluidBody.cs), apagar as duas sobrecargas de conveniência
-(linhas 170 e 172) — nenhuma tem chamador. Manter só
+Em [FluidBody.cs](Scripts/Core/FluidBody.cs) eram **três** sobrecargas sem chamador, não duas:
+a de `uint substanceId` também estava morta. Sobrou só
 `Append(Vector3[], Vector3[], Color[], uint[])`.
 
-### 1.3 [M] Remover o caminho "morrer no chão" (kill colliders)
+### 1.3 [M] ✅ Remover o caminho "morrer no chão" (kill colliders)
 
 Apagar, nesta ordem:
 
@@ -108,11 +130,27 @@ Apagar, nesta ordem:
 2. `Scripts/Core/FluidSolver.cs`: `m_killColliderBuffer`, `m_killColliderCount`, `m_solveKillCollidersKernel`, `SetKillColliders()`, `SolveKillColliders()`, e a chamada dentro de `StepPhysics`. Liberar o buffer no `Dispose` some junto.
 3. `Scripts/Runtime/SpillFluidWorld.cs`: `m_groundColliders` e a chamada `SetKillColliders`.
 
-Manter `Graveyard` — o pool novo continua usando o cemitério para parquear slot livre.
+Executado com dois desvios do texto acima:
 
-Critério de aceite: derramar no chão deixa a poça parada no chão (ainda sem morte por tempo — isso é a Fase 3).
+- **Mais kernel morto que o previsto.** `FluidSolver.compute` caiu de 894 para 554 linhas.
+  Além do `SolveKillColliders`, estavam declarados e nunca despachados: `SolveGlassware`,
+  `SolveFlaskSDF` (com os structs `Glassware`/`FlaskSDFData` e os helpers de perfil e de
+  amostragem do atlas 3D — restos do frasco analítico e do SDF de mesh revertido),
+  `DespawnPass` e `KillPlanePass`. Todos removidos.
+- **`Graveyard` saiu do shader.** Depois das remoções nenhum kernel lia o uniform. A
+  propriedade `FluidSolver.Graveyard` em C# continua, porque o `MarkDead` do
+  `SpillFluidWorld` escreve a posição do cemitério pela CPU. A Fase 3.2 reintroduz o uniform
+  junto com o kernel de morte por TTL.
+- **Chão virou colisor comum**, em vez de sumir da lista. `m_groundColliders` foi absorvido
+  por `m_surfaceColliders` (renomeado, já que não contém só bancada) e vai para
+  `SetColliders`. Assim a cena não fica sem chão entre a Fase 1 e a Fase 3.
 
-### 1.4 [M] Remover `SpillSurface` e a morte condicionada à bancada
+Critério de aceite: derramar no chão deixa a poça parada no chão (ainda sem morte por tempo — isso é a Fase 3). ✅
+
+### 1.4 [M] ⏸ Remover `SpillSurface` e a morte condicionada à bancada — **ADIADA**
+
+Adiada de propósito: executada sozinha, deixa a cena **sem nenhum colisor** até a 3.3 chegar.
+Vai em par com a **3.3 (colidir com tudo)**, no mesmo branch.
 
 1. Apagar `Scripts/Runtime/SpillSurface.cs` (+ `.meta`).
 2. Em `SpillFluidWorld`: apagar `m_surfaces`, `SpillSurfaceKind`, `IsOnBench()`, `m_benchColliders`, `UploadSurfaceColliders()` e as chamadas.
@@ -122,59 +160,56 @@ Critério de aceite: derramar no chão deixa a poça parada no chão (ainda sem 
 
 **Estado temporário esperado:** entre 1.4 e 3.3 as partículas não colidem com nada e não morrem. Isso é aceitável e some na Fase 3. Não tentar "consertar" no meio.
 
-### 1.5 [S] Remover o construtor de cena obsoleto
+### 1.5 [S] ✅ Remover o construtor de cena obsoleto
 
 `Assets/LabSpillClean/Editor/LiquidCompositionSceneBuilder.cs` monta a demo de camadas do
 sistema antigo. Vai ser substituído na Fase 5. Apagar (+ `.meta`).
 
-### 1.6 [S] Podar o VFX de derramamento do LiquidFX
+### 1.6 ~~Podar o VFX de derramamento do LiquidFX~~ — ✅ **CANCELADA**
 
-Apagar (arquivos + `.meta`). Verificado: `FlaskVolume` não referencia nenhum deles.
+`Assets/LiquidFX` é somente-leitura. O VFX ruim continua lá e simplesmente não é usado.
+A cópia dos 5 arquivos aproveitáveis virou a tarefa **2.0** (Fase 2).
 
-```
-Assets/LiquidFX/Runtime/Stream/            (LiquidPourController, LiquidStreamRibbon)
-Assets/LiquidFX/Runtime/Spill/             (LiquidSpillManager, LiquidSpillPuddle)
-Assets/LiquidFX/Runtime/Impact/            (LiquidImpactFX, LiquidSurfaceImpacts, LiquidBuoyancy)
-Assets/LiquidFX/Runtime/Core/              (LiquidFXRuntime, LiquidFXDemoRig)
-Assets/LiquidFX/Runtime/Containers/LiquidSurface.cs
-Assets/LiquidFX/Runtime/Containers/LiquidSurfaceSparkles.cs
-Assets/LiquidFX/Runtime/Containers/LiquidFlightQueue.cs
-Assets/LiquidFX/Shaders/LiquidStream.shader
-Assets/LiquidFX/Shaders/LiquidPuddle.shader
-Assets/LiquidFX/Shaders/LiquidParticle.shader
-Assets/LiquidFX/Shaders/LiquidSurface.shader
-Assets/LiquidFX/Editor/LiquidFXBuilder.cs
-Assets/LiquidFX/Editor/LiquidFXTextureFactory.cs
-Assets/LiquidFX/Editor/LiquidSurfaceEditor.cs
-Assets/LiquidFX/Editor/ShowcaseSceneSetup.cs
-Assets/LiquidFX/Scenes/                    (4 cenas de demo do sistema antigo)
-Assets/LiquidFX/Generated/                 (gerado pelo builder que está sendo apagado)
-```
+### 1.7 [S] ✅ Membros mortos em arquivos que sobrevivem à reforma
 
-**Preservar:**
-```
-Assets/LiquidFX/Runtime/Containers/FlaskVolume.cs
-Assets/LiquidFX/Runtime/Containers/ILiquidContainer.cs
-Assets/LiquidFX/Runtime/Containers/LiquidContainerRegistry.cs
-Assets/LiquidFX/Runtime/Library/LiquidDefinition.cs
-Assets/LiquidFX/Runtime/Library/LiquidCategory.cs
-Assets/LiquidFX/Editor/FlaskVolumeEditor.cs
-Assets/LiquidFX/Editor/LiquidLibraryBuilder.cs
-Assets/LiquidFX/Editor/LiquidLibraryValidator.cs
-Assets/LiquidFX/Editor/LiquidFXPaths.cs
-Assets/LiquidFX/SPEC-Camadas.md
-```
+Varredura de membros públicos sem referência, restrita aos arquivos que **não** serão
+reescritos (`GridHash`, `BitonicSort`, `SmoothingKernel`, `FluidBoundary`,
+`SpillRenderBridge`, `SpillVisualSettings`). Resultado: só
+`SpillRenderBridge.Entry.ParticleMesh` e `Entry.Args` — duplicatas nunca ligadas, já que a
+Renderer Feature mantém o próprio `splatArgs`. Removidos.
 
-Depois de apagar, **corrigir o que sobrou**:
-- `ILiquidContainer.cs`: a doc menciona `LiquidSurface` (só comentário) — reescrever a frase. **[S]**
-- `LiquidFXPaths.cs`: apagar as constantes de caminho que apontam para `Generated/`. **[S]**
-- `LiquidFX/README.md`: reescrever para o escopo novo (só biblioteca + FlaskVolume). **[S]**
-
-Critério de aceite: compila; `Tools > LiquidFX > ...` mostra só os menus de biblioteca e validação.
+**Pendência anotada, não executada:** `Entry.FilterBySubstance` é escrito como `true` e nunca
+como `false`. É configurabilidade morta, mas remover exige mexer também no shader SSF; fica
+para a Fase 3, junto com o resto do caminho de render.
 
 ---
 
 ## Fase 2 — Biblioteca de líquidos (assets)
+
+### 2.0 [M] Copiar a base do LiquidFX para dentro do LabSpillClean
+
+Copiar, renomear tipo e namespace, sem alterar o original:
+
+| origem (somente-leitura) | destino |
+|---|---|
+| `LiquidFX/Runtime/Library/LiquidCategory.cs` | `LabSpillClean/Scripts/Liquid/SpillLiquidCategory.cs` |
+| `LiquidFX/Runtime/Library/LiquidDefinition.cs` | `LabSpillClean/Scripts/Liquid/SpillLiquidDefinition.cs` |
+| `LiquidFX/Runtime/Containers/ILiquidContainer.cs` | `LabSpillClean/Scripts/Liquid/ISpillLiquidContainer.cs` |
+| `LiquidFX/Runtime/Containers/LiquidContainerRegistry.cs` | `LabSpillClean/Scripts/Liquid/SpillContainerRegistry.cs` |
+| `LiquidFX/Runtime/Containers/FlaskVolume.cs` | `LabSpillClean/Scripts/Liquid/SpillFlaskVolume.cs` |
+
+Regras:
+- namespace `LabSpill`; `CreateAssetMenu` vira `menuName = "Lab Spill/..."` para não duplicar
+  a entrada de menu do original;
+- `using LiquidVolumeFX;` permanece — o LVP continua sendo consumido de onde está;
+- a doc de `ISpillLiquidContainer` cita `LiquidSurface` (tipo que não foi copiado): reescrever
+  a frase;
+- `SpillFlaskVolume` mantém a API inteira (`AddLayeredML`, `RemoveTopML`, `IsAbovePort`,
+  `PortCentreWorld`, `PortRadius`, `SurfaceWorldY`, `TopLiquid`, `EvaluateTiltFlowMLPerSecond`).
+
+Copiar também `LiquidFX/Editor/FlaskVolumeEditor.cs`, `LiquidLibraryBuilder.cs` e
+`LiquidLibraryValidator.cs` para `LabSpillClean/Editor/`, apontados aos tipos novos.
+`LiquidFXPaths.cs` **não** é copiado: os caminhos dele apontam para `LiquidFX/Generated`.
 
 ### 2.1 [M] Conversor JSON → ScriptableObject
 
@@ -354,10 +389,10 @@ Com o custo de emissão eliminado, o orçamento vai para a simulação:
 ### 3.5 [M] Captura no frasco receptor
 
 Substituir `TryFindReceiver` ([SpillFluidWorld.cs:436](Scripts/Runtime/SpillFluidWorld.cs:436)),
-que hoje varre `SpillLiquidContainer[]`, por consulta ao `LiquidContainerRegistry`:
+que hoje varre `SpillLiquidContainer[]`, por consulta ao `SpillContainerRegistry`:
 
 ```csharp
-ILiquidContainer receiver = LiquidContainerRegistry.FindReceiverUnder(particlePos, fromY);
+ISpillLiquidContainer receiver = SpillContainerRegistry.FindReceiverUnder(particlePos, fromY);
 ```
 
 **Preservar** duas coisas boas do código atual, que o registro não tem:
@@ -365,7 +400,7 @@ ILiquidContainer receiver = LiquidContainerRegistry.FindReceiverUnder(particlePo
   porque com readback assíncrono a amostragem é ainda mais esparsa que os 0,1 s de hoje;
 - a folga do raio visual do SSF (`visualRadiusScale`), para a gota que *parece* ter entrado.
 
-Implementar como método novo no `SpillFluidWorld` que usa `FlaskVolume.PortCentreWorld` /
+Implementar como método novo no `SpillFluidWorld` que usa `SpillFlaskVolume.PortCentreWorld` /
 `PortRadius` em vez do `TryGetOpening` do baker.
 
 Ao capturar: `flask.AddLayeredML(mlPorPartícula, definiçãoDaSubstância)` e liberar o slot.
@@ -395,7 +430,7 @@ Medir com o Profiler, cena `LabSpillDemo`, derramando 250 mL:
 
 ### 4.1 [C] `SpillPourEmitter` vira a ponte LVP ↔ partículas
 
-Reescrever `Scripts/Liquid/SpillPourEmitter.cs`. Fonte passa a ser `FlaskVolume` + `LiquidVolume`:
+Reescrever `Scripts/Liquid/SpillPourEmitter.cs`. Fonte passa a ser `SpillFlaskVolume` + `LiquidVolume`:
 
 ```
 por frame, se lv.GetSpillPoint(out spillPos, out spillAmount):
@@ -417,7 +452,7 @@ Notas:
 
 ### 4.2 [M] Migrar `SpillBurner` para LVP
 
-Trocar o alvo `SpillLiquidContainer` por `FlaskVolume`. Mapeamento:
+Trocar o alvo `SpillLiquidContainer` por `SpillFlaskVolume`. Mapeamento:
 
 | hoje | passa a ser |
 |---|---|
@@ -487,10 +522,10 @@ Para cada um de `Frasco - Agua`, `Frasco - Alcool`, `Frasco - Oleo`,
    (SPEC §2.7: os prefabs do projeto usam `DefaultNoFlask`; preservar o sufixo `NoFlask`).
 3. Conferir a mesh: LVP quer pivô centrado e mesh fechada — usar `CenterPivot()` e
    `autoCloseMesh` do próprio inspector do LVP se o `flask.fbx` estiver aberto no gargalo.
-4. Adicionar `FlaskVolume`: `capacityML = 250`, preencher `initialContents` com os
+4. Adicionar `SpillFlaskVolume`: `capacityML = 250`, preencher `initialContents` com os
    `LiquidDefinition` da Fase 2 e as mesmas mL de hoje, ajustar `portRadius` ao gargalo real.
 5. Adicionar `SpillColliderExclude` (Fase 3.3).
-6. `SpillPourEmitter` continua no pai, agora apontando para o `FlaskVolume`.
+6. `SpillPourEmitter` continua no pai, agora apontando para o `SpillFlaskVolume`.
 
 Os nomes das configurações de teste da cena (mistura vs camadas) já descrevem o resultado
 esperado; usar como checklist visual.

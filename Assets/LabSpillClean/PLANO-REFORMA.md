@@ -186,102 +186,110 @@ para a Fase 3, junto com o resto do caminho de render.
 
 ## Fase 2 — Biblioteca de líquidos (assets)
 
-### 2.0 [M] Copiar a base do LiquidFX para dentro do LabSpillClean
+**Status: 2.0, 2.1 e 2.2 fechadas.** Falta rodar o conversor dentro do Unity (2.1b), validar
+(2.3) e arquivar os JSONs (2.4).
 
-Copiar, renomear tipo e namespace, sem alterar o original:
+### 2.0 [M] ✅ Copiar a base do LiquidFX para dentro do LabSpillClean
 
 | origem (somente-leitura) | destino |
 |---|---|
-| `LiquidFX/Runtime/Library/LiquidCategory.cs` | `LabSpillClean/Scripts/Liquid/SpillLiquidCategory.cs` |
-| `LiquidFX/Runtime/Library/LiquidDefinition.cs` | `LabSpillClean/Scripts/Liquid/SpillLiquidDefinition.cs` |
-| `LiquidFX/Runtime/Containers/ILiquidContainer.cs` | `LabSpillClean/Scripts/Liquid/ISpillLiquidContainer.cs` |
-| `LiquidFX/Runtime/Containers/LiquidContainerRegistry.cs` | `LabSpillClean/Scripts/Liquid/SpillContainerRegistry.cs` |
-| `LiquidFX/Runtime/Containers/FlaskVolume.cs` | `LabSpillClean/Scripts/Liquid/SpillFlaskVolume.cs` |
+| `LiquidFX/Runtime/Library/LiquidCategory.cs` | `Scripts/Liquid/SpillLiquidCategory.cs` |
+| `LiquidFX/Runtime/Library/LiquidDefinition.cs` | `Scripts/Liquid/SpillLiquidDefinition.cs` |
+| `LiquidFX/Runtime/Containers/ILiquidContainer.cs` | `Scripts/Liquid/ISpillLiquidContainer.cs` |
+| `LiquidFX/Runtime/Containers/LiquidContainerRegistry.cs` | `Scripts/Liquid/SpillContainerRegistry.cs` |
+| `LiquidFX/Runtime/Containers/FlaskVolume.cs` | `Scripts/Liquid/SpillFlaskVolume.cs` |
+| `LiquidFX/Editor/FlaskVolumeEditor.cs` | `Editor/SpillFlaskVolumeEditor.cs` |
+| `LiquidFX/Editor/LiquidLibraryValidator.cs` | `Editor/SpillLiquidLibraryValidator.cs` |
 
-Regras:
-- namespace `LabSpill`; `CreateAssetMenu` vira `menuName = "Lab Spill/..."` para não duplicar
-  a entrada de menu do original;
-- `using LiquidVolumeFX;` permanece — o LVP continua sendo consumido de onde está;
-- a doc de `ISpillLiquidContainer` cita `LiquidSurface` (tipo que não foi copiado): reescrever
-  a frase;
-- `SpillFlaskVolume` mantém a API inteira (`AddLayeredML`, `RemoveTopML`, `IsAbovePort`,
-  `PortCentreWorld`, `PortRadius`, `SurfaceWorldY`, `TopLiquid`, `EvaluateTiltFlowMLPerSecond`).
+Namespace `LabSpill` / `LabSpill.EditorTools`; menus sob `Tools/Lab Spill`. O `LiquidVolumePro`
+continua sendo consumido de onde está. `LiquidLibraryBuilder` **não** foi copiado: ele gera uma
+vitrine (mercúrio, xarope, ácido) sem relação com este projeto; quem ocupa o lugar dele é o
+conversor da 2.1.
 
-Copiar também `LiquidFX/Editor/FlaskVolumeEditor.cs`, `LiquidLibraryBuilder.cs` e
-`LiquidLibraryValidator.cs` para `LabSpillClean/Editor/`, apontados aos tipos novos.
-`LiquidFXPaths.cs` **não** é copiado: os caminhos dele apontam para `LiquidFX/Generated`.
+### 2.1 [M] ✅ Conversor JSON → assets
 
-### 2.1 [M] Conversor JSON → ScriptableObject
+`Editor/SpillLiquidLibraryBuilder.cs`, menu `Tools > Lab Spill > Converter JSONs em assets de
+liquido`. Lê os JSONs por um DTO próprio, não pelo `LiquidConfig` — assim continua funcionando
+depois que a Fase 4 apagar aquela classe. Idempotente.
 
-Script de Editor novo: `Assets/LabSpillClean/Editor/LiquidConfigMigrator.cs`,
-menu `Tools > Lab Spill > Migrar JSONs para assets de líquido`.
+Saída em `Assets/LabSpillClean/Liquids/`, conferida por ensaio numérico sobre os JSONs reais:
 
-Entrada: `Assets/LabSpillClean/Configs/{Water,Alcohol,Oil,Default}LiquidConfig.json`
-(desserializar com o `LiquidConfig` atual, antes de ele ser apagado na Fase 4).
+| asset | nome | categoria | densidade | alpha | murkiness | visc 0..1 | visc mPa·s | ebulição |
+|---|---|---|---|---|---|---|---|---|
+| `Liq_Alcohol` | Alcool | `Cat_Polar` | 0,789 | 0,20 | 0,04 | 0,024 | 1,2 | 78,4 °C |
+| `Liq_Water` | Agua | `Cat_Polar` | 1,000 | 0,25 | 0,05 | 0,000 | 1,0 | 100 °C |
+| `Liq_Oil` | Oleo | `Cat_Oleoso` | 0,920 | 0,64 | 0,20 | 0,555 | 68,0 | 300 °C |
+| `Liq_Default` | Agua realista calibrada | `Cat_Aquoso` | 1,000 | 0,52 | 0,18 | 0,000 | 1,0 | 100 °C |
 
-Saída, em `Assets/LabSpillClean/Liquids/`:
+Empilhamento resultante, de baixo para cima: **água (1,0) → óleo (0,92) → álcool (0,789)**.
 
-**Categorias** (`LiquidCategory`) — `stackDensity` **tem de ser único por categoria** (SPEC §2.4):
+Duas conversões **não** são fiéis ao JSON, de propósito:
+- `alpha` normaliza `absorptionDensity` sobre 0..5 (o teto em que o `SpillFluidWorld` de fato
+  clampava `_Absorption`), não sobre o 0..12 nominal do campo — que nenhum config chega perto de
+  usar e deixaria todo líquido abaixo de alpha 0,27, quase transparente;
+- `scale` sai fixo em 0,12. O campo mais próximo no JSON é `waveDetail`, que descreve detalhe de
+  onda e não a escala do ruído volumétrico do LVP; a derivação punha todos em ~0,41, perto do
+  teto 0,48, o que num frasco de poucos centímetros lê como areia grossa.
 
-| Asset | stackDensity | origem |
-|---|---|---|
-| `Cat_Aquoso` | 1.000 | `densityKgPerLiter` da água |
-| `Cat_Alcoolico` | 0.789 | idem álcool |
-| `Cat_Oleoso` | 0.880 | idem óleo |
+**Anomalia herdada dos dados, não corrigida:** `DefaultLiquidConfig.json` tem `category:
+"aquoso"` enquanto `WaterLiquidConfig.json` tem `"polar"`. São duas águas que **não se
+misturam** entre si. É assim hoje; a conversão foi fiel. Se for engano de autoria, o conserto é
+editar o JSON e reconverter, ou reatribuir a categoria no asset.
 
-Regra: líquidos que **devem** misturar entre si compartilham categoria. Água e álcool são
-miscíveis na vida real, mas no LVP mistura ⇒ densidade idêntica ⇒ perderiam a estratificação.
-A cena atual tem tanto `Mistura - Agua + Alcool` quanto `Camadas - Agua + Oleo`; portanto
-água e álcool ficam na **mesma** categoria (`Cat_Aquoso`, densidade 1.0) e o óleo na sua.
-Isso reproduz o comportamento visível hoje.
+### 2.2 [M] ✅ Bloco térmico e de jato no `SpillLiquidDefinition`
 
-**Líquidos** (`LiquidDefinition`) — mapeamento campo a campo:
+Campos novos, que o `LiquidVolume.LiquidLayer` não tem onde guardar: `boilingPointC`,
+`vaporColor`, `steamRateAtMaximum`, `steamStartIntensity`, `streamColor` e `physicalViscosity`
+(mPa·s reais, separada da `viscosity` 0..1 estética do LVP).
 
-| LiquidDefinition | vem de LiquidConfig |
-|---|---|
-| `displayName` | `liquidName` |
-| `category` | pela tabela acima (via `category` do JSON) |
-| `color` | `bodyColor`, com `a` = `Mathf.Clamp01(absorptionDensity / 12f)` |
-| `murkColor` | `deepColor` |
-| `murkiness` | `turbidity` |
-| `scale` | `Mathf.Clamp(waveDetail * 0.48f, 0.001f, 0.48f)` |
-| `viscosity` | `Mathf.Clamp01(Mathf.Log10(Max(1, viscosity)) / 3.3f)` (mesma normalização já usada em `_Viscosity01`) |
-| `bubblesOpacity` | `bubbleColor.a` |
-| `adjustmentSpeed` | 1 |
+### 2.2b [C] ✅ Mistura por categoria — **desvio do SPEC-Camadas**
 
-Os campos térmicos (`boilingPointC`, taxas de bolha/vapor, cores de vapor) **não cabem** no
-`LiquidDefinition` do LiquidFX. Ver 2.2.
+O SPEC concluiu que a densidade tem de morar na categoria, porque no LVP mistura exige densidade
+bit-a-bit igual. Executando a conversão, os dados mostraram que isso não cabe neste projeto:
 
-### 2.2 [M] Estender `LiquidDefinition` com o bloco térmico
+- `WaterLiquidConfig` e `AlcoholLiquidConfig` são **ambos** `category: "polar"` ⇒ têm de misturar;
+- as densidades são 1,0 e 0,789 ⇒ o álcool tem de flutuar sobre o óleo (0,92), e a água afundar.
 
-Adicionar ao `LiquidDefinition` (é asset nosso, pode crescer):
+Uma densidade só por categoria perde um dos dois, e a cena mostra os dois casos
+(`Mistura - Agua + Alcool` e `Camadas - Alcool + Oleo`). O sistema atual já separava os
+conceitos: `LiquidComposition.Receive` mistura por **string de categoria**, e
+`UpdateSeparation` empilha por **densidade**. Manter os dois é não-regressão, não feature nova.
 
-```csharp
-[Header("Térmico")]
-[SerializeField] float boilingPointC = 100f;
-[SerializeField] Color vaporColor = new Color(0.94f, 0.98f, 1f, 0.18f);
-[SerializeField, Min(0f)] float steamRateAtMaximum = 5f;
-[SerializeField, Range(0f, 1f)] float steamStartIntensity = 0.65f;
-[Header("Jato (SSF)")]
-[SerializeField] Color streamColor = new Color(0.16f, 0.68f, 0.69f, 1f);
-[SerializeField, Min(0.2f)] float physicalViscosity = 1f;   // mPa·s, usada pela física
-```
+Solução implementada:
 
-Motivo de `physicalViscosity` separado de `viscosity`: o campo do LVP é 0–1 estético; a física
-do jato precisa do valor real em centipoise (hoje vem de `LiquidConfig.viscosity`).
+- `SpillLiquidCategory` perde `stackDensity` e vira só família de mistura;
+- `SpillLiquidDefinition` ganha `densityKgPerLiter` próprio;
+- `ApplyTo` grava `layer.miscible = false` **sempre** ⇒ o agrupamento interno do LVP nunca roda
+  (`while (miscible && density == groupDensity)` — SPEC §2.4), então densidade fica livre para
+  significar só ordem de empilhamento;
+- `SpillFlaskVolume.AddLayeredCore` procura o slot da **mesma categoria** e mistura ali, com
+  `SpillLiquidDefinition.BlendInto` fazendo a média ponderada por volume de cor, murkColor,
+  murkiness, scale, viscosidade, bolhas e densidade. O slot passa a reportar o ingrediente de
+  maior volume;
+- `RemoveTopML` drena só o slot do topo — cada slot já é uma mistura pronta, o passeio por grupo
+  de densidade igual virou código morto;
+- `BakeInitialContents` passa pelo mesmo caminho de mistura (via `AddLayeredCore`, para não
+  recursar dentro de `Initialise`);
+- o preview do inspector funde cargas da mesma categoria, senão mostraria duas barras onde o
+  frasco mostra uma;
+- o validador inverte a regra: colisão de densidade deixa de ser erro de mistura e vira aviso de
+  ordem de empilhamento indefinida entre famílias.
 
-Preencher no conversor a partir do JSON. Manter os getters públicos no mesmo estilo do arquivo.
+### 2.1b [S] Rodar o conversor (precisa do Unity aberto)
+
+`Tools > Lab Spill > Converter JSONs em assets de liquido`. Conferir que nasceram 3 categorias e
+4 líquidos em `Assets/LabSpillClean/Liquids/`.
 
 ### 2.3 [S] Validar a biblioteca
 
-Rodar `LiquidLibraryValidator` (já existe) e confirmar: nenhuma categoria repete `stackDensity`;
-todo `LiquidDefinition` tem categoria.
+`Tools > Lab Spill > Validar biblioteca de liquidos`. Esperado: nenhum erro. Um aviso de
+densidade idêntica entre `Liq_Water` e `Liq_Default` é esperado enquanto a anomalia de categoria
+da 2.1 não for resolvida.
 
 ### 2.4 [S] Arquivar os JSONs
 
-Mover `Assets/LabSpillClean/Configs/` → `Assets/LabSpillClean/Configs~/` (o `~` faz o Unity
-ignorar a pasta) e apagar os `.meta`. Ficam como referência histórica, fora da build.
-Só depois da Fase 4 concluída.
+Mover `Configs/` → `Configs~/` (o `~` faz o Unity ignorar) e apagar os `.meta`. **Só depois da
+Fase 4**, porque o `LiquidConfig` ainda os lê em runtime.
 
 ---
 

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -61,6 +61,7 @@ namespace LabSpill.Rendering
         {
             public RTHandle depth;
             public RTHandle normal;
+            public RTHandle substance;
             public ComputeBuffer splatArgs;
             public int width;
             public int height;
@@ -87,10 +88,11 @@ namespace LabSpill.Rendering
             {
                 depth?.Release();
                 normal?.Release();
+                substance?.Release();
                 splatArgs?.Release();
                 splatArgs = null;
                 m_argsCount = -1;
-                depth = normal = null;
+                depth = normal = substance = null;
             }
         }
 
@@ -225,6 +227,14 @@ namespace LabSpill.Rendering
                 filterMode: FilterMode.Bilinear,
                 wrapMode: TextureWrapMode.Clamp,
                 name: $"_PBDFluidSurfaceNormal_{id}");
+            // Um canal de 8 bits comporta as 8 substancias com folga. Point filter:
+            // um indice interpolado misturaria identidades e pintaria a fronteira
+            // entre dois liquidos com a aparencia de um terceiro.
+            targets.substance = RTHandles.Alloc(width, height,
+                colorFormat: GraphicsFormat.R8_UNorm,
+                filterMode: FilterMode.Point,
+                wrapMode: TextureWrapMode.Clamp,
+                name: $"_PBDFluidSurfaceSubstance_{id}");
             targets.EnsureSplatArgs(m_splatMesh, entry.Count);
             return targets;
         }
@@ -233,11 +243,13 @@ namespace LabSpill.Rendering
         {
             entry.SurfaceDepth = targets.depth.rt;
             entry.SurfaceNormal = targets.normal.rt;
+            entry.SurfaceSubstance = targets.substance.rt;
             if (entry.SurfaceRenderer == null) return;
             if (entry.SurfaceProperties == null) entry.SurfaceProperties = new MaterialPropertyBlock();
             entry.SurfaceRenderer.GetPropertyBlock(entry.SurfaceProperties);
             entry.SurfaceProperties.SetTexture(ShaderIDs.SurfaceDepth, entry.SurfaceDepth);
             entry.SurfaceProperties.SetTexture(ShaderIDs.SurfaceNormal, entry.SurfaceNormal);
+            entry.SurfaceProperties.SetTexture(ShaderIDs.SurfaceSubstance, entry.SurfaceSubstance);
             entry.SurfaceRenderer.SetPropertyBlock(entry.SurfaceProperties);
         }
 
@@ -327,8 +339,9 @@ namespace LabSpill.Rendering
             public static readonly int NormalRadius = Shader.PropertyToID("_PBDFluidNormalRadius");
             public static readonly int Positions = Shader.PropertyToID("_Positions");
             public static readonly int SubstanceIds = Shader.PropertyToID("_SubstanceIds");
-            public static readonly int SubstanceIndex = Shader.PropertyToID("_SubstanceIndex");
-            public static readonly int UseSubstanceFilter = Shader.PropertyToID("_UseSubstanceFilter");
+            public static readonly int SubstanceEncode = Shader.PropertyToID("_SubstanceEncode");
+            public static readonly int SurfaceSubstance =
+                Shader.PropertyToID("_PBDFluidSurfaceSubstance");
             public static readonly int Scale = Shader.PropertyToID("_Scale");
         }
 
@@ -364,8 +377,6 @@ namespace LabSpill.Rendering
                 public ComputeBuffer args;
                 public ComputeBuffer positions;
                 public ComputeBuffer substanceIds;
-                public int substanceIndex;
-                public bool filterBySubstance;
                 public float scale;
             }
 
@@ -453,6 +464,15 @@ namespace LabSpill.Rendering
                     clearBuffer = true
                 });
 
+                var substanceImport = new ImportResourceParams
+                {
+                    clearOnFirstUse = true,
+                    clearColor = Color.clear,
+                    discardOnLastUse = false
+                };
+                TextureHandle substanceTarget =
+                    renderGraph.ImportTexture(targets.substance, substanceImport);
+
                 using (var builder = renderGraph.AddRasterRenderPass<DepthData>(
                     "PBD SSF Depth " + suffix, out var passData))
                 {
@@ -461,10 +481,9 @@ namespace LabSpill.Rendering
                     passData.args = targets.splatArgs;
                     passData.positions = entry.Positions;
                     passData.substanceIds = entry.SubstanceIds;
-                    passData.substanceIndex = entry.SubstanceIndex;
-                    passData.filterBySubstance = entry.FilterBySubstance;
                     passData.scale = entry.Radius * 2f * m_owner.EffectiveParticleScale;
                     builder.SetRenderAttachment(eye, 0, AccessFlags.WriteAll);
+                    builder.SetRenderAttachment(substanceTarget, 1, AccessFlags.WriteAll);
                     builder.SetRenderAttachmentDepth(privateDepth, AccessFlags.WriteAll);
                     builder.SetRenderFunc((DepthData data, RasterGraphContext context) =>
                     {
@@ -473,9 +492,7 @@ namespace LabSpill.Rendering
                         data.mat.SetBuffer(ShaderIDs.Positions, data.positions);
                         if (data.substanceIds != null)
                             data.mat.SetBuffer(ShaderIDs.SubstanceIds, data.substanceIds);
-                        data.mat.SetInt(ShaderIDs.SubstanceIndex, data.substanceIndex);
-                        data.mat.SetFloat(ShaderIDs.UseSubstanceFilter,
-                            data.filterBySubstance && data.substanceIds != null ? 1f : 0f);
+                        data.mat.SetFloat(ShaderIDs.SubstanceEncode, 1f / 255f);
                         data.mat.SetFloat(ShaderIDs.Scale, data.scale);
                         context.cmd.DrawMeshInstancedIndirect(data.mesh, 0, data.mat, 0, data.args);
                     });
@@ -493,8 +510,6 @@ namespace LabSpill.Rendering
                     passData.args = targets.splatArgs;
                     passData.positions = entry.Positions;
                     passData.substanceIds = entry.SubstanceIds;
-                    passData.substanceIndex = entry.SubstanceIndex;
-                    passData.filterBySubstance = entry.FilterBySubstance;
                     passData.scale = entry.Radius * 2f * m_owner.EffectiveParticleScale;
                     builder.SetRenderAttachment(eye, 0, AccessFlags.ReadWrite);
                     builder.SetRenderAttachmentDepth(privateDepth, AccessFlags.Read);
@@ -503,9 +518,6 @@ namespace LabSpill.Rendering
                         data.mat.SetBuffer(ShaderIDs.Positions, data.positions);
                         if (data.substanceIds != null)
                             data.mat.SetBuffer(ShaderIDs.SubstanceIds, data.substanceIds);
-                        data.mat.SetInt(ShaderIDs.SubstanceIndex, data.substanceIndex);
-                        data.mat.SetFloat(ShaderIDs.UseSubstanceFilter,
-                            data.filterBySubstance && data.substanceIds != null ? 1f : 0f);
                         data.mat.SetFloat(ShaderIDs.Scale, data.scale);
                         context.cmd.DrawMeshInstancedIndirect(data.mesh, 0, data.mat, 1, data.args);
                     });

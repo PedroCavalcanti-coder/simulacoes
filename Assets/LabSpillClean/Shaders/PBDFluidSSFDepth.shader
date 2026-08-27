@@ -1,4 +1,4 @@
-Shader "Hidden/PBDFluid/SSFDepth"
+﻿Shader "Hidden/PBDFluid/SSFDepth"
 {
     Properties
     {
@@ -12,7 +12,11 @@ Shader "Hidden/PBDFluid/SSFDepth"
         Pass
         {
             Name "Depth"
-            ColorMask R
+            // Alvo 0 guarda a profundidade em R; alvo 1, a substancia vencedora.
+            // O ZTest escolhe o fragmento mais proximo, entao a substancia gravada e
+            // sempre a da particula que realmente aparece naquele pixel.
+            ColorMask R 0
+            ColorMask R 1
             ZWrite On
             ZTest [_FluidZTest]
             Cull Off
@@ -27,9 +31,12 @@ Shader "Hidden/PBDFluid/SSFDepth"
 
             StructuredBuffer<float4> _Positions;   // xyz = posicao mundo
             StructuredBuffer<uint> _SubstanceIds;
-            int      _SubstanceIndex;
-            float    _UseSubstanceFilter;
             float    _Scale;                       // diametro (2*raio)
+            float    _SubstanceEncode;             // 1/255: id -> canal de 8 bits
+
+            // Slot morto carrega este id. Ver FluidPool.
+            static const uint DEAD_SUBSTANCE = 0xFFFFFFFF;
+
             struct Attributes
             {
                 float3 positionOS : POSITION;
@@ -40,11 +47,19 @@ Shader "Hidden/PBDFluid/SSFDepth"
                 float4 positionHCS : SV_POSITION;
                 float2 sphereCoord : TEXCOORD0;
                 nointerpolation float3 centerVS : TEXCOORD1;
-                nointerpolation float valid : TEXCOORD2;
+                nointerpolation float substance : TEXCOORD2;
             };
 
             void setup()
             {
+            }
+
+            // Manda o quad inteiro para fora do frustum. Descartar a particula morta
+            // com clip() no fragmento custava a rasterizacao completa do quad antes do
+            // descarte; aqui o triangulo some antes de virar pixel.
+            float4 CullVertex()
+            {
+                return float4(-2.0, -2.0, 0.5, 1.0);
             }
 
             Varyings vert (Attributes IN)
@@ -54,33 +69,33 @@ Shader "Hidden/PBDFluid/SSFDepth"
 #if UNITY_ANY_INSTANCING_ENABLED
                 instanceId = unity_InstanceID;
 #endif
+                uint substance = _SubstanceIds[instanceId];
+
                 float3 centerWS = _Positions[instanceId].xyz;
                 float3 centerVS = TransformWorldToView(centerWS);
                 float radius = _Scale * 0.5;
                 float2 corner = IN.positionOS.xy;
                 float3 vertexVS = centerVS + float3(corner * radius, 0.0);
+
                 Varyings o;
-                o.positionHCS = TransformWViewToHClip(vertexVS);
+                o.positionHCS = substance == DEAD_SUBSTANCE
+                    ? CullVertex()
+                    : TransformWViewToHClip(vertexVS);
                 o.sphereCoord = corner;
                 o.centerVS = centerVS;
-                o.valid = 1.0;
-#if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                if (_UseSubstanceFilter > 0.5 &&
-                    _SubstanceIds[instanceId] != (uint)_SubstanceIndex)
-                    o.valid = 0.0;
-#endif
+                o.substance = (float)substance * _SubstanceEncode;
                 return o;
             }
 
             struct FragmentOutput
             {
-                float eye : SV_Target;
+                float eye : SV_Target0;
+                float substance : SV_Target1;
                 float depth : SV_Depth;
             };
 
             FragmentOutput frag (Varyings IN)
             {
-                clip(IN.valid - 0.5);
                 float radiusSq = dot(IN.sphereCoord, IN.sphereCoord);
                 clip(1.0 - radiusSq);
 
@@ -93,6 +108,7 @@ Shader "Hidden/PBDFluid/SSFDepth"
 
                 FragmentOutput output;
                 output.eye = eyeDepth;
+                output.substance = IN.substance;
                 float4 surfaceHCS = TransformWViewToHClip(surfaceVS);
                 output.depth = surfaceHCS.z / surfaceHCS.w;
                 return output;
@@ -124,9 +140,9 @@ Shader "Hidden/PBDFluid/SSFDepth"
 
             StructuredBuffer<float4> _Positions;
             StructuredBuffer<uint> _SubstanceIds;
-            int      _SubstanceIndex;
-            float    _UseSubstanceFilter;
             float    _Scale;                       // diametro visual em world space
+
+            static const uint DEAD_SUBSTANCE = 0xFFFFFFFF;
 
             struct Attributes
             {
@@ -138,12 +154,16 @@ Shader "Hidden/PBDFluid/SSFDepth"
             {
                 float4 positionHCS : SV_POSITION;
                 float2 sphereCoord : TEXCOORD0;
-                nointerpolation float valid : TEXCOORD1;
-                nointerpolation float centerEye : TEXCOORD2;
+                nointerpolation float centerEye : TEXCOORD1;
             };
 
             void setup()
             {
+            }
+
+            float4 CullVertex()
+            {
+                return float4(-2.0, -2.0, 0.5, 1.0);
             }
 
             Varyings vert(Attributes IN)
@@ -160,21 +180,16 @@ Shader "Hidden/PBDFluid/SSFDepth"
                 float3 vertexVS = centerVS + float3(corner * radius, 0.0);
 
                 Varyings output;
-                output.positionHCS = TransformWViewToHClip(vertexVS);
+                output.positionHCS = _SubstanceIds[instanceId] == DEAD_SUBSTANCE
+                    ? CullVertex()
+                    : TransformWViewToHClip(vertexVS);
                 output.sphereCoord = corner;
-                output.valid = 1.0;
                 output.centerEye = -centerVS.z;
-#if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED)
-                if (_UseSubstanceFilter > 0.5 &&
-                    _SubstanceIds[instanceId] != (uint)_SubstanceIndex)
-                    output.valid = 0.0;
-#endif
                 return output;
             }
 
             float4 frag(Varyings IN) : SV_Target0
             {
-                clip(IN.valid - 0.5);
                 clip(IN.centerEye - 1e-5);
                 float radiusSq = dot(IN.sphereCoord, IN.sphereCoord);
                 clip(1.0 - radiusSq);

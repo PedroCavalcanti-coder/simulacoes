@@ -26,16 +26,9 @@ namespace LabSpill
         sealed class Liquid
         {
             public string key;
-            public string name;
-            public Material material;
             public LiquidConfig config;
         }
 
-        sealed class SurfaceView
-        {
-            public readonly SpillRenderBridge.Entry entry = new SpillRenderBridge.Entry();
-            public MeshRenderer renderer;
-        }
 
         struct PendingReadback
         {
@@ -59,8 +52,21 @@ namespace LabSpill
         public Bounds simulationBounds = new Bounds(Vector3.zero, new Vector3(6f, 4f, 6f));
 
         readonly List<Liquid> m_liquids = new List<Liquid>();
-        readonly List<SurfaceView> m_views = new List<SurfaceView>();
         readonly List<int> m_liveParticlesPerLiquid = new List<int>();
+
+        // Uma entrada, um material, um proxy. Antes era um conjunto por liquido, e
+        // cada um disparava um pipeline SSF inteiro sobre as mesmas particulas.
+        readonly SpillRenderBridge.Entry m_entry = new SpillRenderBridge.Entry();
+        MeshRenderer m_surfaceRenderer;
+        Material m_surfaceMaterial;
+
+        readonly Vector4[] m_substanceShallow = new Vector4[SpillRenderBridge.MaxSubstances];
+        readonly Vector4[] m_substanceDeep = new Vector4[SpillRenderBridge.MaxSubstances];
+        readonly Vector4[] m_substanceAbsorb = new Vector4[SpillRenderBridge.MaxSubstances];
+        readonly Vector4[] m_substanceEmission = new Vector4[SpillRenderBridge.MaxSubstances];
+        readonly Vector4[] m_substanceOptics = new Vector4[SpillRenderBridge.MaxSubstances];
+        readonly Vector4[] m_substanceSurface = new Vector4[SpillRenderBridge.MaxSubstances];
+        bool m_substanceTableDirty = true;
         readonly Queue<PendingReadback> m_pending = new Queue<PendingReadback>(4);
 
         FluidPool m_pool;
@@ -90,10 +96,14 @@ namespace LabSpill
         float m_sceneRefreshTimer;
         bool m_deathsRequested;
 
-        static readonly int SurfaceDepth = Shader.PropertyToID("_PBDFluidSurfaceDepth");
-        static readonly int SurfaceNormal = Shader.PropertyToID("_PBDFluidSurfaceNormal");
         static readonly int DensityThreshold = Shader.PropertyToID("_DensityThreshold");
         static readonly int EdgeSoftness = Shader.PropertyToID("_EdgeSoftness");
+        static readonly int SubstanceShallow = Shader.PropertyToID("_SubstanceShallow");
+        static readonly int SubstanceDeep = Shader.PropertyToID("_SubstanceDeep");
+        static readonly int SubstanceAbsorb = Shader.PropertyToID("_SubstanceAbsorb");
+        static readonly int SubstanceEmission = Shader.PropertyToID("_SubstanceEmission");
+        static readonly int SubstanceOptics = Shader.PropertyToID("_SubstanceOptics");
+        static readonly int SubstanceSurface = Shader.PropertyToID("_SubstanceSurface");
 
         public SpillVisualSettings Settings => settings;
         public int ParticleCount => m_pool != null ? m_pool.AliveCount : 0;
@@ -214,28 +224,90 @@ namespace LabSpill
                 if (m_liquids[i].key == key) return i;
             if (config == null) return -1;
 
-            Material source = template != null ? template : surfaceMaterialTemplate;
-            Shader fallback = source == null ? Shader.Find("PBDFluid/SSFSurface") : null;
-            if (source == null && fallback == null) return -1;
+            if (m_liquids.Count >= SpillRenderBridge.MaxSubstances)
+            {
+                Debug.LogWarning($"[LabSpill] Limite de {SpillRenderBridge.MaxSubstances} " +
+                    $"substancias atingido; '{config.liquidName}' vai reusar a aparencia da " +
+                    "primeira. Aumente MaxSubstances e o array do shader se precisar de mais.", this);
+                return 0;
+            }
 
-            Material material = source != null ? new Material(source) : new Material(fallback);
-            material.name = "Spill - " + config.liquidName;
-            material.hideFlags = HideFlags.HideAndDontSave;
-            ApplyConfig(material, config);
-            if (material.HasProperty(DensityThreshold))
-                material.SetFloat(DensityThreshold, settings.densityThreshold);
-            if (material.HasProperty(EdgeSoftness))
-                material.SetFloat(EdgeSoftness, settings.edgeSoftness);
+            EnsureSurfaceMaterial(template);
+            if (m_surfaceMaterial == null) return -1;
 
             m_liquids.Add(new Liquid
             {
                 key = key,
-                name = config.liquidName,
-                material = material,
                 config = LiquidConfig.Copy(config)
             });
             m_liveParticlesPerLiquid.Add(0);
+            m_substanceTableDirty = true;
             return m_liquids.Count - 1;
+        }
+
+        void EnsureSurfaceMaterial(Material template)
+        {
+            if (m_surfaceMaterial != null) return;
+
+            Material source = template != null ? template : surfaceMaterialTemplate;
+            Shader fallback = source == null ? Shader.Find("PBDFluid/SSFSurface") : null;
+            if (source == null && fallback == null) return;
+
+            m_surfaceMaterial = source != null ? new Material(source) : new Material(fallback);
+            m_surfaceMaterial.name = "Spill - superficie unificada";
+            m_surfaceMaterial.hideFlags = HideFlags.HideAndDontSave;
+            if (m_surfaceMaterial.HasProperty(DensityThreshold))
+                m_surfaceMaterial.SetFloat(DensityThreshold, settings.densityThreshold);
+            if (m_surfaceMaterial.HasProperty(EdgeSoftness))
+                m_surfaceMaterial.SetFloat(EdgeSoftness, settings.edgeSoftness);
+        }
+
+        /// <summary>
+        /// Reescreve a tabela de aparencia. Um material atende a cena inteira: o passe
+        /// de profundidade grava qual substancia venceu cada pixel e o shader indexa
+        /// estes arrays por esse valor.
+        /// </summary>
+        void UploadSubstanceTable()
+        {
+            if (!m_substanceTableDirty || m_surfaceMaterial == null) return;
+            m_substanceTableDirty = false;
+
+            for (int i = 0; i < SpillRenderBridge.MaxSubstances; i++)
+            {
+                LiquidConfig config = i < m_liquids.Count ? m_liquids[i].config : null;
+                if (config == null)
+                {
+                    m_substanceShallow[i] = Color.white;
+                    m_substanceDeep[i] = Color.white;
+                    m_substanceAbsorb[i] = Color.white;
+                    m_substanceEmission[i] = Color.black;
+                    m_substanceOptics[i] = new Vector4(1f, 0f, 1.333f, 0.9f);
+                    m_substanceSurface[i] = new Vector4(1f, 0f, 0f, 0f);
+                    continue;
+                }
+
+                m_substanceShallow[i] = config.surfaceColor;
+                m_substanceDeep[i] = config.deepColor;
+                m_substanceAbsorb[i] = config.absorptionColor;
+                m_substanceEmission[i] = config.emissionColor;
+                m_substanceOptics[i] = new Vector4(
+                    Mathf.Clamp(config.absorptionDensity, 0f, 5f),
+                    config.turbidity,
+                    config.indexOfRefraction,
+                    config.smoothness);
+                m_substanceSurface[i] = new Vector4(
+                    config.surfaceOpacity,
+                    config.lightTransmission * 2f,
+                    config.emissionStrength,
+                    0f);
+            }
+
+            m_surfaceMaterial.SetVectorArray(SubstanceShallow, m_substanceShallow);
+            m_surfaceMaterial.SetVectorArray(SubstanceDeep, m_substanceDeep);
+            m_surfaceMaterial.SetVectorArray(SubstanceAbsorb, m_substanceAbsorb);
+            m_surfaceMaterial.SetVectorArray(SubstanceEmission, m_substanceEmission);
+            m_surfaceMaterial.SetVectorArray(SubstanceOptics, m_substanceOptics);
+            m_surfaceMaterial.SetVectorArray(SubstanceSurface, m_substanceSurface);
         }
 
         // ------------------------------------------------------------------ emissao
@@ -498,93 +570,51 @@ namespace LabSpill
 
         void PublishSurfaces()
         {
-            while (m_views.Count < m_liquids.Count)
-                m_views.Add(new SurfaceView());
+            if (m_surfaceMaterial == null || m_pool == null) return;
 
-            for (int i = 0; i < m_views.Count; i++)
-            {
-                SurfaceView view = m_views[i];
-                Liquid liquid = m_liquids[i];
-                EnsureProxy(view, liquid);
-                view.renderer.transform.SetPositionAndRotation(m_domain.center, Quaternion.identity);
-                view.renderer.transform.localScale = m_domain.size;
-                view.renderer.sharedMaterial = liquid.material;
+            UploadSubstanceTable();
+            EnsureProxy();
 
-                bool hasParticles = m_pool != null && m_liveParticlesPerLiquid[i] > 0;
-                view.renderer.enabled = hasParticles;
-                view.entry.Positions = m_pool?.Positions;
-                view.entry.SubstanceIds = m_pool?.SubstanceIds;
-                view.entry.SubstanceIndex = i;
-                view.entry.FilterBySubstance = true;
-                // Slot morto carrega SubstanceIds 0xFFFFFFFF, que nunca casa com o
-                // indice de nenhum liquido: o vertex shader do SSF descarta sozinho.
-                // Ate a marca d'agua, e nao ate a capacidade: o resto do buffer nunca
-                // foi ocupado e so geraria quads degenerados.
-                view.entry.Count = hasParticles ? m_pool.HighWaterMark : 0;
-                view.entry.Radius = settings.PhysicalRadius;
-                view.entry.WorldBounds = m_domain;
-                view.entry.SurfaceRenderer = view.renderer;
-                if (view.entry.SurfaceProperties == null)
-                    view.entry.SurfaceProperties = new MaterialPropertyBlock();
-                view.entry.SurfaceProperties.Clear();
-                if (view.entry.SurfaceDepth != null)
-                    view.entry.SurfaceProperties.SetTexture(SurfaceDepth, view.entry.SurfaceDepth);
-                if (view.entry.SurfaceNormal != null)
-                    view.entry.SurfaceProperties.SetTexture(SurfaceNormal, view.entry.SurfaceNormal);
-                view.renderer.SetPropertyBlock(view.entry.SurfaceProperties);
-                SpillRenderBridge.Register(view.entry);
-            }
+            int alive = 0;
+            for (int i = 0; i < m_liveParticlesPerLiquid.Count; i++)
+                alive += m_liveParticlesPerLiquid[i];
+
+            m_surfaceRenderer.transform.SetPositionAndRotation(m_domain.center, Quaternion.identity);
+            m_surfaceRenderer.transform.localScale = m_domain.size;
+            m_surfaceRenderer.enabled = alive > 0;
+
+            m_entry.Positions = m_pool.Positions;
+            m_entry.SubstanceIds = m_pool.SubstanceIds;
+            // Ate a marca d'agua, e nao ate a capacidade: o resto do buffer nunca foi
+            // ocupado. Os slots mortos dentro da marca sao cortados no vertex shader.
+            m_entry.Count = alive > 0 ? m_pool.HighWaterMark : 0;
+            m_entry.Radius = settings.PhysicalRadius;
+            m_entry.WorldBounds = m_domain;
+            m_entry.SurfaceRenderer = m_surfaceRenderer;
+            m_entry.SurfaceProperties ??= new MaterialPropertyBlock();
+            SpillRenderBridge.Register(m_entry);
         }
 
-        void EnsureProxy(SurfaceView view, Liquid liquid)
+        void EnsureProxy()
         {
-            if (view.renderer != null) return;
+            if (m_surfaceRenderer != null) return;
+
             GameObject proxy = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            proxy.name = "Spill Surface - " + liquid.name;
+            proxy.name = "Spill Surface";
             Collider col = proxy.GetComponent<Collider>();
             if (col != null) Destroy(col);
             proxy.transform.SetParent(transform, true);
-            view.renderer = proxy.GetComponent<MeshRenderer>();
-            view.renderer.shadowCastingMode = ShadowCastingMode.Off;
-            view.renderer.receiveShadows = true;
-        }
-
-        static void ApplyConfig(Material material, LiquidConfig config)
-        {
-            SetColor(material, "_ShallowColor", config.surfaceColor);
-            SetColor(material, "_DeepColor", config.deepColor);
-            SetColor(material, "_AbsorptionColor", config.absorptionColor);
-            SetColor(material, "_ReflectionColor", config.surfaceColor);
-            SetColor(material, "_EmissionColor", config.emissionColor);
-            SetColor(material, "_FoamColor", config.foamColor);
-            SetFloat(material, "_Opacity", config.surfaceOpacity);
-            SetFloat(material, "_LightTransmission", config.lightTransmission * 2f);
-            SetFloat(material, "_Absorption", Mathf.Clamp(config.absorptionDensity, 0f, 5f));
-            SetFloat(material, "_Turbidity", config.turbidity);
-            SetFloat(material, "_IOR", config.indexOfRefraction);
-            SetFloat(material, "_Smoothness", config.smoothness);
-            SetFloat(material, "_EmissionStrength", config.emissionStrength);
-        }
-
-        static void SetColor(Material material, string property, Color value)
-        {
-            if (material.HasProperty(property)) material.SetColor(property, value);
-        }
-
-        static void SetFloat(Material material, string property, float value)
-        {
-            if (material.HasProperty(property)) material.SetFloat(property, value);
+            m_surfaceRenderer = proxy.GetComponent<MeshRenderer>();
+            m_surfaceRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            m_surfaceRenderer.receiveShadows = true;
+            m_surfaceRenderer.sharedMaterial = m_surfaceMaterial;
         }
 
         void OnDestroy()
         {
-            for (int i = 0; i < m_views.Count; i++)
-            {
-                SpillRenderBridge.Unregister(m_views[i].entry);
-                if (m_views[i].renderer != null) Destroy(m_views[i].renderer.gameObject);
-            }
-            for (int i = 0; i < m_liquids.Count; i++)
-                if (m_liquids[i].material != null) Destroy(m_liquids[i].material);
+            SpillRenderBridge.Unregister(m_entry);
+            if (m_surfaceRenderer != null) Destroy(m_surfaceRenderer.gameObject);
+            if (m_surfaceMaterial != null) Destroy(m_surfaceMaterial);
 
             m_solver?.Dispose();
             m_pool?.Dispose();

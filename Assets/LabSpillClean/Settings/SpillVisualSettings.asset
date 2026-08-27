@@ -23,13 +23,15 @@ MonoBehaviour:
   surfaceTension: 0.55
   edgeSoftness: 2.2
   densityThreshold: 0.01
-  solverIterations: 1
-  constraintIterations: 1
+  solverIterations: 2
+  constraintIterations: 3
   maxPhysicsStepsPerFrame: 1
   viscosity: 0.01
   massScale: 1
   restDamping: 2
+  cohesion: 0.4
   maxParticlesPerFrame: 32
-  emissionFlushInterval: 0.025
-  benchLifetimeMin: 10
-  benchLifetimeMax: 30
+  particleLifetimeMin: 8
+  particleLifetimeMax: 20
+  colliderRefreshInterval: 0.5
+  maxColliders: 64

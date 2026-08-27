@@ -1,20 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using LabLiquidVR;
 using PBDFluid;
 using UnityEngine;
 
 namespace LabSpill
 {
-    /// <summary>
-    /// Marcador: o fluido atravessa este colisor.
-    ///
-    /// Existe por causa da vidraria. Uma particula que acerta a boca de um frasco tem
-    /// de ser capturada pelo porto; uma casca de vidro aproximada por primitiva fecharia
-    /// essa boca e a gota bateria na tampa invisivel. A gota que erra o frasco passa ao
-    /// lado e cai na bancada, que e um colisor de verdade.
-    /// </summary>
-    [DisallowMultipleComponent]
-    public sealed class SpillColliderExclude : MonoBehaviour { }
-
     /// <summary>
     /// Reune os colisores da cena para o solver.
     ///
@@ -64,7 +54,7 @@ namespace LabSpill
                 Collider col = m_overlap[i];
                 if (col == null || !col.enabled || !col.gameObject.activeInHierarchy)
                     continue;
-                if (col.GetComponentInParent<SpillColliderExclude>() != null)
+                if (IsExcluded(col))
                     continue;
 
                 m_colliders.Add(ToGpu(col));
@@ -74,6 +64,28 @@ namespace LabSpill
                 Array = new FluidSolver.ColliderGPU[Mathf.NextPowerOfTwo(m_colliders.Count)];
             m_colliders.CopyTo(Array);
             return true;
+        }
+
+        /// <summary>
+        /// Vidraria nao colide. Todo frasco da cena tem um BoxCollider em volta, e
+        /// desde que a particula passou a colidir com tudo essa caixa viraria tampa: a
+        /// gota mirada na boca bateria no topo e nunca chegaria ao porto que a converte
+        /// em volume. Em troca, a gota que erra atravessa o corpo do frasco - artefato
+        /// pequeno e local, contra a perda da funcao principal.
+        ///
+        /// O reconhecimento e automatico, por presenca do componente de recipiente, em
+        /// vez de depender de um marcador posto a mao em cada frasco: frasco novo ja
+        /// nasce certo, e nao ha marcador para alguem esquecer. O marcador
+        /// <see cref="SpillColliderExclude"/> continua existindo para os outros casos.
+        ///
+        /// Procura nas duas direcoes porque o colisor fica no frasco e o recipiente no
+        /// filho que desenha o liquido.
+        /// </summary>
+        static bool IsExcluded(Collider col)
+        {
+            if (col.GetComponentInParent<SpillColliderExclude>() != null) return true;
+            if (col.GetComponentInParent<SpillLiquidContainer>() != null) return true;
+            return col.GetComponentInChildren<SpillLiquidContainer>(true) != null;
         }
 
         FluidSolver.ColliderGPU ToGpu(Collider col)

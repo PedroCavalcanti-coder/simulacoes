@@ -462,16 +462,24 @@ void UpdateVelocities(int id : SV_DispatchThreadID)
 // um numero que muda de ordem de grandeza toda vez que o raio da particula muda.
 float CohesionSpline01(float r)
 {
+	// Saida unica, inicializada. Com um return dentro do if, o compilador nao prova
+	// que todo caminho atribui o retorno e avisa "potentially uninitialized" - que em
+	// Vulkan nao e' so ruido de console: o valor pode sair lixo em algum driver.
+	float result = 0.0;
 	float h = KernelRadius;
-	if (r <= 0.0 || r >= h) return 0.0;
 
-	float a = h - r;
-	float w = (2.0 * r > h)
-		? a * a * a * r * r * r
-		: 2.0 * a * a * a * r * r * r - (h * h * h * h * h * h) / 64.0;
+	if (r > 0.0 && r < h)
+	{
+		float a = h - r;
+		float w = (2.0 * r > h)
+			? a * a * a * r * r * r
+			: 2.0 * a * a * a * r * r * r - (h * h * h * h * h * h) / 64.0;
 
-	// 32/(pi h^9) e a normalizacao original; multiplicar por 2 pi h^3 leva o pico a 1.
-	return w * 64.0 / (h * h * h * h * h * h);
+		// 32/(pi h^9) e a normalizacao original; multiplicar por 2 pi h^3 leva o pico a 1.
+		result = w * 64.0 / (h * h * h * h * h * h);
+	}
+
+	return result;
 }
 
 float3 ComputeViscosity(int id, float3 pi)
@@ -563,26 +571,32 @@ void KillParticle(int id, uint portPlusOne)
 // inteiro da boca dentro de um unico substep.
 bool EntersPort(PortGPU port, float3 pOld, float3 pNew)
 {
+	// Saida unica pelo mesmo motivo de CohesionSpline01: tres returns faziam o
+	// compilador avisar que o retorno podia sair nao inicializado.
+	bool entered = false;
+
 	float3 dNew = pNew - port.center;
 	float axial = dot(dNew, port.normal);
 	float3 radial = dNew - port.normal * axial;
 	float r2 = port.radius * port.radius;
 
 	if (axial <= PortEntryDepth && axial >= -port.captureDepth && dot(radial, radial) <= r2)
-		return true;
+		entered = true;
 
-	float axialOld = dot(pOld - port.center, port.normal);
-	float denom = axialOld - axial;
-	if (axialOld >= 0.0 && axial <= 0.0 && abs(denom) > 1e-6)
+	if (!entered)
 	{
-		float t = saturate(axialOld / denom);
-		float3 hit = lerp(pOld, pNew, t) - port.center;
-		float3 hitRadial = hit - port.normal * dot(hit, port.normal);
-		if (dot(hitRadial, hitRadial) <= r2)
-			return true;
+		float axialOld = dot(pOld - port.center, port.normal);
+		float denom = axialOld - axial;
+		if (axialOld >= 0.0 && axial <= 0.0 && abs(denom) > 1e-6)
+		{
+			float t = saturate(axialOld / denom);
+			float3 hit = lerp(pOld, pNew, t) - port.center;
+			float3 hitRadial = hit - port.normal * dot(hit, port.normal);
+			entered = dot(hitRadial, hitRadial) <= r2;
+		}
 	}
 
-	return false;
+	return entered;
 }
 
 #pragma kernel UpdatePositions

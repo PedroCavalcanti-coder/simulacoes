@@ -80,6 +80,19 @@ namespace LabSpill
         [Tooltip("Local offset of the mouth from the flask origin.")]
         [SerializeField] Vector3 portLocalOffset = new Vector3(0f, 0.12f, 0f);
 
+        [Header("Agitacao")]
+        [Tooltip("Quanto tempo o liquido continua se mexendo depois de receber outro.")]
+        [SerializeField, Min(0f)] float mixingSeconds = 3f;
+
+        [Tooltip("Turbulencia no pico da mistura, somada a de repouso.")]
+        [SerializeField, Range(0f, 1f)] float mixingTurbulence = 0.35f;
+
+        [Tooltip("Turbulencia no pico da fervura.")]
+        [SerializeField, Range(0f, 1f)] float boilingTurbulence = 0.5f;
+
+        [Tooltip("Bolhas no pico da fervura.")]
+        [SerializeField, Range(0, 200)] int boilingBubbles = 110;
+
         LiquidVolume liquidVolume;
         float contentsML;
         bool initialised;
@@ -94,6 +107,26 @@ namespace LabSpill
 
         bool warnedAboutUntrackedAdd;
         bool warnedAboutLayerOverflow;
+
+        // Estado da agitacao. Mistura decai sozinha; fervura e mantida de fora, pelo
+        // fogareiro, enquanto o liquido estiver quente.
+        float mixing;
+        float boiling;
+
+        // Valores de repouso, lidos uma vez do proprio LiquidVolume para a agitacao
+        // saber para onde voltar quando acabar.
+        float restTurbulence = -1f;
+        int restBubbles;
+
+        // Ultimos valores escritos. Existem porque escrever no LiquidVolume nao e de
+        // graca: turbulencia dispara UpdateMaterialProperties, e bolhas disparam a
+        // reconstrucao de uma textura 3D. Sem histerese, uma intensidade que varia
+        // continuamente reconstruiria essa textura todo frame.
+        float writtenTurbulence = -1f;
+        int writtenBubbles = -1;
+        float writtenBubbleSpeed = -1f;
+
+        const int BubbleQuantum = 8;
 
         public Transform Transform => transform;
         public LiquidVolume Volume => liquidVolume != null ? liquidVolume : liquidVolume = GetComponent<LiquidVolume>();
@@ -145,6 +178,73 @@ namespace LabSpill
         void OnDisable()
         {
             SpillContainerRegistry.Unregister(this);
+        }
+
+        /// <summary>
+        /// Intensidade de fervura, 0 a 1. Chamado pelo fogareiro a cada frame enquanto o
+        /// frasco estiver na zona de calor.
+        /// </summary>
+        public void SetBoiling(float intensity01) => boiling = Mathf.Clamp01(intensity01);
+
+        /// <summary>Quanto o liquido ainda esta se mexendo por causa de uma mistura.</summary>
+        public float MixAgitation => mixing;
+
+        /// <summary>
+        /// Agita o liquido porque algo foi despejado nele. A mistura deixa de ser uma
+        /// troca instantanea de cor e passa a ter duracao: sem isso, dois liquidos se
+        /// fundem num unico frame e o unico sinal de que houve mistura e a cor final.
+        /// </summary>
+        void KickMixing(float incomingML)
+        {
+            float total = Mathf.Max(1f, ContentsML);
+            mixing = Mathf.Clamp01(mixing + incomingML / total * 3f);
+        }
+
+        void LateUpdate()
+        {
+            if (Volume == null) return;
+
+            if (restTurbulence < 0f)
+            {
+                restTurbulence = Volume.turbulence1;
+                restBubbles = Volume.bubblesAmount;
+            }
+
+            if (mixingSeconds > 0f && mixing > 0f)
+                mixing = Mathf.Max(0f, mixing - Time.deltaTime / mixingSeconds);
+
+            ApplyAgitation();
+        }
+
+        void ApplyAgitation()
+        {
+            LiquidVolume volume = Volume;
+
+            // Fervura e mistura empurram a mesma turbulencia; vale a mais forte, em vez
+            // de somar, para ferver enquanto se mistura nao estourar a escala.
+            float turbulence = restTurbulence +
+                Mathf.Max(mixing * mixingTurbulence, boiling * boilingTurbulence);
+            if (Mathf.Abs(turbulence - writtenTurbulence) > 0.01f)
+            {
+                writtenTurbulence = turbulence;
+                volume.turbulence1 = turbulence;
+            }
+
+            // Quantizado: cada mudanca de bubblesAmount reconstroi uma textura 3D.
+            int bubbles = restBubbles + Mathf.RoundToInt(boiling * boilingBubbles / BubbleQuantum)
+                * BubbleQuantum;
+            if (bubbles != writtenBubbles)
+            {
+                writtenBubbles = bubbles;
+                volume.bubblesAmount = bubbles;
+            }
+
+            float bubbleSpeed = Mathf.Lerp(0.02f, 0.22f, boiling);
+            if (Mathf.Abs(bubbleSpeed - writtenBubbleSpeed) > 0.01f)
+            {
+                writtenBubbleSpeed = bubbleSpeed;
+                volume.bubblesVerticalSpeed = bubbleSpeed;
+            }
         }
 
         void OnValidate()
@@ -307,6 +407,7 @@ namespace LabSpill
                     slotLiquid[compatible] = liquidToAdd;
                 layers[compatible].layerName = slotLiquid[compatible].DisplayName;
 
+                KickMixing(accepted);
                 Volume.UpdateLayers(true);
                 return accepted;
             }

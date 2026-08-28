@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using LabLiquidVR;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -34,6 +34,17 @@ namespace LabSpill
         readonly HashSet<SpillLiquidContainer> m_known = new HashSet<SpillLiquidContainer>();
         readonly Dictionary<SpillLiquidContainer, ThermalEffects> m_effects =
             new Dictionary<SpillLiquidContainer, ThermalEffects>();
+
+        // Frascos novos. A temperatura mora aqui e nao no frasco porque calor e assunto
+        // do fogareiro: o frasco nao precisa saber que existe fogo no mundo. As bolhas
+        // sao as nativas do LiquidVolumePro, entao este caminho nao tem ParticleSystem
+        // dentro do vidro nem colisao de bolha com a parede - some tudo o que a metade
+        // antiga precisava para faze-las por conta propria.
+        readonly HashSet<SpillFlaskVolume> m_flasksTouching = new HashSet<SpillFlaskVolume>();
+        readonly Dictionary<SpillFlaskVolume, float> m_flaskTemperature =
+            new Dictionary<SpillFlaskVolume, float>();
+        readonly List<KeyValuePair<SpillFlaskVolume, float>> m_flaskScratch =
+            new List<KeyValuePair<SpillFlaskVolume, float>>();
 
         Material m_bubbleMaterial;
         Material m_steamMaterial;
@@ -103,6 +114,7 @@ namespace LabSpill
         {
             FindLiquidsInZone();
             float dt = Time.fixedDeltaTime;
+            UpdateFlasks(dt);
             foreach (SpillLiquidContainer liquid in m_known)
             {
                 if (liquid == null) continue;
@@ -118,6 +130,7 @@ namespace LabSpill
         void FindLiquidsInZone()
         {
             m_touching.Clear();
+            m_flasksTouching.Clear();
             if (heatingZone == null || !heatingZone.enabled) return;
 
             Vector3 scale = heatingZone.transform.lossyScale;
@@ -134,10 +147,66 @@ namespace LabSpill
 
             for (int i = 0; i < count; i++)
             {
+                SpillFlaskVolume flask = ResolveFlask(m_overlap[i]);
+                if (flask != null && flask.ContentsML > 0.0001f)
+                {
+                    m_flasksTouching.Add(flask);
+                    if (!m_flaskTemperature.ContainsKey(flask))
+                        m_flaskTemperature[flask] = ambientTemperatureC;
+                    continue;
+                }
+
                 SpillLiquidContainer liquid = ResolveLiquid(m_overlap[i]);
                 if (liquid == null || liquid.currentVolumeML <= 0.0001f) continue;
                 m_touching.Add(liquid);
                 m_known.Add(liquid);
+            }
+        }
+
+        static SpillFlaskVolume ResolveFlask(Collider collider)
+        {
+            if (collider == null) return null;
+            SpillFlaskVolume flask = collider.GetComponentInParent<SpillFlaskVolume>();
+            if (flask != null) return flask;
+            return collider.GetComponentInChildren<SpillFlaskVolume>();
+        }
+
+        /// <summary>
+        /// Aquece, resfria e ferve os frascos novos. Bem mais curto que o caminho antigo
+        /// porque a fervura visivel e nativa do LiquidVolumePro: aqui so se calcula a
+        /// intensidade e se entrega ao frasco.
+        /// </summary>
+        void UpdateFlasks(float dt)
+        {
+            // Copia antes de percorrer: o corpo escreve no proprio dicionario.
+            m_flaskScratch.Clear();
+            foreach (var pair in m_flaskTemperature) m_flaskScratch.Add(pair);
+
+            for (int i = 0; i < m_flaskScratch.Count; i++)
+            {
+                SpillFlaskVolume flask = m_flaskScratch[i].Key;
+                if (flask == null)
+                {
+                    m_flaskTemperature.Remove(flask);
+                    continue;
+                }
+
+                bool heating = lit && m_flasksTouching.Contains(flask) && flask.ContentsML > 0.0001f;
+                float temperature = Mathf.MoveTowards(
+                    m_flaskScratch[i].Value,
+                    heating ? maximumTemperatureC : ambientTemperatureC,
+                    (heating ? heatingRateCPerSecond : coolingRateCPerSecond) * dt);
+                m_flaskTemperature[flask] = temperature;
+
+                SpillLiquidDefinition top = flask.TopLiquid;
+                float boilingPoint = top != null ? top.BoilingPointC : 100f;
+
+                float intensity = 0f;
+                if (flask.ContentsML > 0.0001f && temperature >= boilingPoint)
+                    intensity = Mathf.Clamp01(
+                        Mathf.InverseLerp(boilingPoint, maximumTemperatureC, temperature));
+
+                flask.SetBoiling(intensity);
             }
         }
 

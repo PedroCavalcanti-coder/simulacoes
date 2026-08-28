@@ -26,7 +26,45 @@ namespace LabSpill
         sealed class Liquid
         {
             public string key;
+
+            // Exatamente um destes dois. O frasco novo fala em SpillLiquidDefinition; o
+            // antigo, em LiquidConfig. Os dois convivem enquanto a cena esta sendo
+            // migrada frasco a frasco - some quando o ultimo frasco antigo sair.
             public LiquidConfig config;
+            public SpillLiquidDefinition definition;
+        }
+
+        /// <summary>
+        /// Recipiente que recebe liquido. Andaime da migracao: o frasco novo
+        /// (<see cref="SpillFlaskVolume"/>) e o antigo (<see cref="SpillLiquidContainer"/>)
+        /// convivem para que a cena continue rodando enquanto e migrada. Quando nao houver
+        /// mais frasco antigo, isto vira apenas SpillFlaskVolume.
+        /// </summary>
+        readonly struct Receiver
+        {
+            public readonly SpillFlaskVolume flask;
+            public readonly SpillLiquidContainer legacy;
+
+            public Receiver(SpillFlaskVolume flask) { this.flask = flask; legacy = null; }
+            public Receiver(SpillLiquidContainer legacy) { flask = null; this.legacy = legacy; }
+
+            public bool IsValid => flask != null || legacy != null;
+
+            public bool HasRoomFor(float millilitres) => flask != null
+                ? flask.FreeML >= millilitres * 0.5f
+                : legacy.currentVolumeML < legacy.capacityML - millilitres * 0.5f;
+
+            public bool TryGetPort(out Vector3 centre, out Vector3 normal, out float radius)
+            {
+                if (flask != null)
+                {
+                    centre = flask.PortCentreWorld;
+                    normal = flask.transform.up;
+                    radius = flask.PortRadius;
+                    return radius > 0f;
+                }
+                return legacy.TryGetOpening(out centre, out normal, out radius);
+            }
         }
 
 
@@ -89,9 +127,9 @@ namespace LabSpill
         float m_emissionDiscRadius = -1f;
         int m_emissionDiscCursor;
 
-        SpillLiquidContainer[] m_receivers;
+        readonly List<Receiver> m_receivers = new List<Receiver>(8);
         FluidSolver.PortGPU[] m_ports = new FluidSolver.PortGPU[8];
-        SpillLiquidContainer[] m_portOwners = new SpillLiquidContainer[8];
+        Receiver[] m_portOwners = new Receiver[8];
         int m_portCount;
         float m_sceneRefreshTimer;
         bool m_deathsRequested;
@@ -218,19 +256,32 @@ namespace LabSpill
 
         // ------------------------------------------------------------------ liquidos
 
+        /// <summary>Registra um liquido do frasco novo. Uma entrada por definicao.</summary>
+        public int RegisterLiquid(SpillLiquidDefinition definition, Material template)
+        {
+            if (definition == null) return -1;
+
+            string key = "def:" + definition.GetInstanceID();
+            for (int i = 0; i < m_liquids.Count; i++)
+                if (m_liquids[i].key == key) return i;
+
+            if (!TryReserveSubstanceSlot(definition.DisplayName)) return 0;
+            EnsureSurfaceMaterial(template);
+            if (m_surfaceMaterial == null) return -1;
+
+            m_liquids.Add(new Liquid { key = key, definition = definition });
+            m_liveParticlesPerLiquid.Add(0);
+            m_substanceTableDirty = true;
+            return m_liquids.Count - 1;
+        }
+
         public int RegisterLiquid(string key, LiquidConfig config, Material template)
         {
             for (int i = 0; i < m_liquids.Count; i++)
                 if (m_liquids[i].key == key) return i;
             if (config == null) return -1;
 
-            if (m_liquids.Count >= SpillRenderBridge.MaxSubstances)
-            {
-                Debug.LogWarning($"[LabSpill] Limite de {SpillRenderBridge.MaxSubstances} " +
-                    $"substancias atingido; '{config.liquidName}' vai reusar a aparencia da " +
-                    "primeira. Aumente MaxSubstances e o array do shader se precisar de mais.", this);
-                return 0;
-            }
+            if (!TryReserveSubstanceSlot(config.liquidName)) return 0;
 
             EnsureSurfaceMaterial(template);
             if (m_surfaceMaterial == null) return -1;
@@ -243,6 +294,16 @@ namespace LabSpill
             m_liveParticlesPerLiquid.Add(0);
             m_substanceTableDirty = true;
             return m_liquids.Count - 1;
+        }
+
+        bool TryReserveSubstanceSlot(string displayName)
+        {
+            if (m_liquids.Count < SpillRenderBridge.MaxSubstances) return true;
+
+            Debug.LogWarning($"[LabSpill] Limite de {SpillRenderBridge.MaxSubstances} " +
+                $"substancias atingido; '{displayName}' vai reusar a aparencia da primeira. " +
+                "Aumente MaxSubstances e o array do shader se precisar de mais.", this);
+            return false;
         }
 
         void EnsureSurfaceMaterial(Material template)
@@ -263,6 +324,29 @@ namespace LabSpill
         }
 
         /// <summary>
+        /// Aparencia de um liquido do catalogo novo. A cor do corpo vem de
+        /// <c>Color</c> (cujo alpha e forca de absorcao no LiquidVolumePro) e a do jato
+        /// de <c>StreamColor</c>, que existe para o filete nao herdar a transparencia
+        /// pensada para o volume dentro do frasco.
+        /// </summary>
+        void WriteSubstance(int index, SpillLiquidDefinition definition)
+        {
+            Color stream = definition.StreamColor;
+            Color body = definition.Color;
+
+            m_substanceShallow[index] = stream;
+            m_substanceDeep[index] = new Color(body.r * 0.35f, body.g * 0.35f, body.b * 0.35f, 1f);
+            m_substanceAbsorb[index] = body;
+            m_substanceEmission[index] = Color.black;
+            m_substanceOptics[index] = new Vector4(
+                Mathf.Clamp(body.a * 5f, 0f, 5f),
+                0f,
+                1.333f,
+                0.9f);
+            m_substanceSurface[index] = new Vector4(1f, 0.6f, 0f, 0f);
+        }
+
+        /// <summary>
         /// Reescreve a tabela de aparencia. Um material atende a cena inteira: o passe
         /// de profundidade grava qual substancia venceu cada pixel e o shader indexa
         /// estes arrays por esse valor.
@@ -274,7 +358,14 @@ namespace LabSpill
 
             for (int i = 0; i < SpillRenderBridge.MaxSubstances; i++)
             {
-                LiquidConfig config = i < m_liquids.Count ? m_liquids[i].config : null;
+                Liquid liquid = i < m_liquids.Count ? m_liquids[i] : null;
+                if (liquid != null && liquid.definition != null)
+                {
+                    WriteSubstance(i, liquid.definition);
+                    continue;
+                }
+
+                LiquidConfig config = liquid != null ? liquid.config : null;
                 if (config == null)
                 {
                     m_substanceShallow[i] = Color.white;
@@ -473,10 +564,16 @@ namespace LabSpill
             int portIndex = (int)portPlusOne - 1;
             if (portIndex < 0 || portIndex >= m_portCount) return;
 
-            SpillLiquidContainer receiver = m_portOwners[portIndex];
-            if (receiver == null || substance >= m_liquids.Count) return;
+            Receiver receiver = m_portOwners[portIndex];
+            if (!receiver.IsValid || substance >= m_liquids.Count) return;
 
-            receiver.ReceiveLiquid(m_liquids[(int)substance].config, settings.millilitersPerParticle);
+            Liquid liquid = m_liquids[(int)substance];
+            float millilitres = settings.millilitersPerParticle;
+
+            if (receiver.flask != null)
+                receiver.flask.AddLayeredML(millilitres, liquid.definition);
+            else
+                receiver.legacy.ReceiveLiquid(liquid.config, millilitres);
         }
 
         // ------------------------------------------------------------------ cena
@@ -513,7 +610,16 @@ namespace LabSpill
 
         void RefreshSceneCache()
         {
-            m_receivers = FindObjectsByType<SpillLiquidContainer>(FindObjectsInactive.Exclude);
+            m_receivers.Clear();
+
+            var flasks = FindObjectsByType<SpillFlaskVolume>(FindObjectsInactive.Exclude);
+            for (int i = 0; i < flasks.Length; i++)
+                m_receivers.Add(new Receiver(flasks[i]));
+
+            // Frascos ainda nao migrados. Some junto com SpillLiquidContainer.
+            var legacy = FindObjectsByType<SpillLiquidContainer>(FindObjectsInactive.Exclude);
+            for (int i = 0; i < legacy.Length; i++)
+                m_receivers.Add(new Receiver(legacy[i]));
         }
 
         void UploadColliders(bool force)
@@ -525,22 +631,20 @@ namespace LabSpill
         void UploadPorts()
         {
             m_portCount = 0;
-            if (m_receivers == null) return;
 
             float radius = settings.PhysicalRadius;
             float visualPad = Mathf.Max(0f, radius * settings.visualRadiusScale - radius);
 
-            for (int i = 0; i < m_receivers.Length; i++)
+            for (int i = 0; i < m_receivers.Count; i++)
             {
-                SpillLiquidContainer candidate = m_receivers[i];
-                if (candidate == null || !candidate.isActiveAndEnabled) continue;
+                Receiver candidate = m_receivers[i];
+                if (!candidate.IsValid) continue;
 
                 // Frasco cheio nao vira porto: sem isso a particula sumiria na boca sem
                 // virar volume nenhum.
-                if (candidate.currentVolumeML >= candidate.capacityML -
-                    settings.millilitersPerParticle * 0.5f) continue;
+                if (!candidate.HasRoomFor(settings.millilitersPerParticle)) continue;
 
-                if (!candidate.TryGetOpening(out Vector3 center, out Vector3 normal, out float openingRadius))
+                if (!candidate.TryGetPort(out Vector3 center, out Vector3 normal, out float openingRadius))
                     continue;
                 if (Vector3.Dot(normal, Vector3.up) < 0.55f) continue;
 

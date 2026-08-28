@@ -436,7 +436,33 @@ Medir com o Profiler, cena `LabSpillDemo`, derramando 250 mL:
 
 ## Fase 4 — Frasco em LVP + FlaskVolume
 
-### 4.1 [C] `SpillPourEmitter` vira a ponte LVP ↔ partículas
+**Sequencia corrigida durante a execucao.** O plano mandava apagar o sistema antigo (4.3) e
+so depois reconstruir a cena (5.1). Mas 5.1 e trabalho dentro do Unity, que esta sessao nao
+consegue fazer: executar nessa ordem entregaria sete frascos quebrados para consertar a mao.
+O caminho novo passou a ser construido **ao lado** do antigo, com os dois convivendo ate o
+ultimo frasco ser migrado. A 4.3 vira a ultima tarefa da fase, nao a terceira.
+
+**Status: 4.1 fechada, com o andaime de convivencia.** Falta 4.2 (fogareiro), a migracao da
+cena frasco a frasco, e so entao 4.3.
+
+### 4.0 [C] ✅ Andaime de convivencia
+
+- `SpillPourEmitter` atende os dois frascos. Com `flask` preenchido, se dirige sozinho pelo
+  `GetSpillPoint` do LVP; sem ele, continua sendo chamado pelo container antigo.
+- `SpillFluidWorld` ganhou um `Receiver` que embrulha qualquer um dos dois, e um
+  `RegisterLiquid` por `SpillLiquidDefinition`.
+- `SpillFlaskMigrator` (`Tools > Lab Spill > Migrar frascos selecionados para LVP`) converte
+  um frasco no lugar: le o que o componente antigo declara, poe `LiquidVolume` em
+  `MultipleNoFlask` (o pai continua desenhando o vidro), assa as camadas procurando os assets
+  gerados na Fase 2 e reaponta o emissor. **Nao apaga nada** — o componente antigo so fica
+  desativado, para dar para comparar e voltar atras.
+
+Ordem de debito invertida no caminho novo: debita do frasco **antes** de emitir e devolve o
+que o pool recusou. Com pool de capacidade fixa, emitir primeiro e debitar o aceito depois
+perderia mL sempre que a cena ja estivesse cheia de liquido.
+
+
+### 4.1 [C] ✅ `SpillPourEmitter` vira a ponte LVP ↔ partículas
 
 Reescrever `Scripts/Liquid/SpillPourEmitter.cs`. Fonte passa a ser `SpillFlaskVolume` + `LiquidVolume`:
 
@@ -486,9 +512,9 @@ lv.requireBubblesUpdate = true;
 Isso apaga `ConstrainBubbles`, `UpdateBubbles` e o `SpillBubbleParticle.shader`
 — ~150 linhas e um ParticleSystem por frasco. `UpdateSteam` fica.
 
-### 4.3 [C] Apagar o sistema de frasco antigo
+### 4.3 [C] Apagar o sistema de frasco antigo — **ULTIMA tarefa da fase**
 
-Só depois de 4.1 e 4.2 rodarem. Apagar (+ `.meta`):
+Só depois de 4.1, 4.2 **e da cena inteira migrada e validada**. Apagar (+ `.meta`):
 
 ```
 Scripts/Liquid/SpillLiquidContainer.cs      (841)

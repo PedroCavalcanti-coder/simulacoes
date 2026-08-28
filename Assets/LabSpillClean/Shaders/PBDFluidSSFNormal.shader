@@ -1,4 +1,4 @@
-Shader "Hidden/PBDFluid/SSFNormal"
+﻿Shader "Hidden/PBDFluid/SSFNormal"
 {
     Properties
     {
@@ -59,6 +59,10 @@ Shader "Hidden/PBDFluid/SSFNormal"
             {
                 float depth : SV_Target0;
                 half4 normal : SV_Target1;
+                // A substancia chega aqui ja espalhada pelo blur e so entao e gravada,
+                // por isso ela cobre a mesma area que a superficie e nao sobra borda
+                // com o valor de limpeza.
+                float substance : SV_Target2;
             };
 
             FragmentOutput EmptyOutput()
@@ -66,6 +70,7 @@ Shader "Hidden/PBDFluid/SSFNormal"
                 FragmentOutput output;
                 output.depth = 0.0;
                 output.normal = half4(0.0, 0.0, 0.0, 0.0);
+                output.substance = 0.0;
                 return output;
             }
 
@@ -74,10 +79,13 @@ Shader "Hidden/PBDFluid/SSFNormal"
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
                 float2 uv = input.texcoord.xy;
-                float2 surfaceData = SAMPLE_TEXTURE2D_X_LOD(
-                    _BlitTexture, sampler_LinearClamp, uv, _BlitMipLevel).rg;
+                float4 surfaceData = SAMPLE_TEXTURE2D_X_LOD(
+                    _BlitTexture, sampler_LinearClamp, uv, _BlitMipLevel);
                 float eyeDepth = surfaceData.r;
                 float thicknessWS = max(surfaceData.g, 0.0);
+                // Point sample no proprio pixel: um indice interpolado nao e um indice.
+                float substance = SAMPLE_TEXTURE2D_X_LOD(
+                    _BlitTexture, sampler_PointClamp, uv, _BlitMipLevel).b;
                 if (!IsFluid(eyeDepth)) return EmptyOutput();
 
                 // A geometria opaca continua sendo dona do pixel quando esta
@@ -148,6 +156,7 @@ Shader "Hidden/PBDFluid/SSFNormal"
 
                 FragmentOutput output;
                 output.depth = eyeDepth;
+                output.substance = substance * (1.0 / 255.0);
                 // Alpha transporta a espessura coletiva ate o material final.
                 // O target RGBA16F preserva o valor em unidades de mundo.
                 output.normal = half4(normalWS * 0.5 + 0.5, thicknessWS);

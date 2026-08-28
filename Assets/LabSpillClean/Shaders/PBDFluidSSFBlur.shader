@@ -1,4 +1,4 @@
-Shader "Hidden/PBDFluid/SSFBlur"
+﻿Shader "Hidden/PBDFluid/SSFBlur"
 {
     Properties
     {
@@ -47,13 +47,18 @@ Shader "Hidden/PBDFluid/SSFBlur"
                 return clamp(projectedRadius * max(_Radius, 0.25), 1.0, 96.0);
             }
 
-            float2 Frag(Varyings input) : SV_Target0
+            // A substancia acompanha a profundidade em vez de ser filtrada: ela e um
+            // indice, e a media de dois indices nao e um indice. Cada pixel fica com a
+            // substancia da amostra que forneceu a profundidade mais proxima, entao a
+            // identidade se espalha exatamente ate onde a superficie se espalha.
+            float4 Frag(Varyings input) : SV_Target0
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float2 uv = input.texcoord.xy;
-                float2 centerData = SAMPLE_TEXTURE2D_X_LOD(
-                    _BlitTexture, sampler_PointClamp, uv, _BlitMipLevel).rg;
+                float4 centerData = SAMPLE_TEXTURE2D_X_LOD(
+                    _BlitTexture, sampler_PointClamp, uv, _BlitMipLevel);
                 float center = centerData.r;
+                float substance = centerData.b;
 
                 // Somente pixels vazios proximos da silhueta procuram uma semente.
                 // A maior parte do buffer vazio encerra aqui com cinco leituras,
@@ -61,17 +66,19 @@ Shader "Hidden/PBDFluid/SSFBlur"
                 if (!IsFluid(center))
                 {
                     float seed = FAR_EYE;
+                    float seedSubstance = 0.0;
                     [unroll] for (int i = 1; i <= 4; i++)
                     {
-                        float d0 = SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_PointClamp,
-                            uv + _Direction * _TexelSize.xy * i, _BlitMipLevel).r;
-                        float d1 = SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_PointClamp,
-                            uv - _Direction * _TexelSize.xy * i, _BlitMipLevel).r;
-                        if (IsFluid(d0)) seed = min(seed, d0);
-                        if (IsFluid(d1)) seed = min(seed, d1);
+                        float4 s0 = SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_PointClamp,
+                            uv + _Direction * _TexelSize.xy * i, _BlitMipLevel);
+                        float4 s1 = SAMPLE_TEXTURE2D_X_LOD(_BlitTexture, sampler_PointClamp,
+                            uv - _Direction * _TexelSize.xy * i, _BlitMipLevel);
+                        if (IsFluid(s0.r) && s0.r < seed) { seed = s0.r; seedSubstance = s0.b; }
+                        if (IsFluid(s1.r) && s1.r < seed) { seed = s1.r; seedSubstance = s1.b; }
                     }
-                    if (!IsFluid(seed)) return float2(0.0, 0.0);
+                    if (!IsFluid(seed)) return float4(0.0, 0.0, 0.0, 0.0);
                     center = seed;
+                    substance = seedSubstance;
                 }
 
                 float stepPixels = ProjectedFilterRadius(center) * 0.25;
@@ -80,14 +87,14 @@ Shader "Hidden/PBDFluid/SSFBlur"
                 float nearest = center;
                 [unroll] for (int i = -4; i <= 4; i++)
                 {
-                    float2 sampleData = SAMPLE_TEXTURE2D_X_LOD(
+                    float4 sampleData = SAMPLE_TEXTURE2D_X_LOD(
                         _BlitTexture, sampler_PointClamp,
                         uv + _Direction * _TexelSize.xy * (i * stepPixels),
-                        _BlitMipLevel).rg;
+                        _BlitMipLevel);
                     float d = sampleData.r;
                     depths[i + 4] = d;
                     thicknesses[i + 4] = max(sampleData.g, 0.0);
-                    if (IsFluid(d)) nearest = min(nearest, d);
+                    if (IsFluid(d) && d < nearest) { nearest = d; substance = sampleData.b; }
                 }
 
                 // Aproxima o envelope frontal da massa e limita a correcao a
@@ -128,7 +135,7 @@ Shader "Hidden/PBDFluid/SSFBlur"
                 float smoothedThickness = weightedThickness /
                     max(thicknessWeightSum, 1e-5);
                 float smoothedEye = lerp(smoothed, min(smoothed, reference), tension * 0.8);
-                return float2(smoothedEye, smoothedThickness);
+                return float4(smoothedEye, smoothedThickness, substance, 0.0);
             }
             ENDHLSL
         }

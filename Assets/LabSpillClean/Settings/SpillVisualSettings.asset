@@ -15,7 +15,7 @@ MonoBehaviour:
   millilitersPerParticle: 0.5
   maxParticles: 6000
   visualRadiusScale: 4
-  resolutionScale: 0.5
+  resolutionScale: 0.75
   blurRadius: 3.2
   blurIterations: 1
   normalRadius: 1.5
@@ -29,7 +29,7 @@ MonoBehaviour:
   viscosity: 0.01
   massScale: 1
   restDamping: 2
-  cohesion: 0.4
+  cohesion: 2
   maxParticlesPerFrame: 32
   particleLifetimeMin: 8
   particleLifetimeMax: 20

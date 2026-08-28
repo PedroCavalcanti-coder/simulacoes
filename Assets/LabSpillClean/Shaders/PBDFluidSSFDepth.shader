@@ -12,11 +12,11 @@
         Pass
         {
             Name "Depth"
-            // Alvo 0 guarda a profundidade em R; alvo 1, a substancia vencedora.
-            // O ZTest escolhe o fragmento mais proximo, entao a substancia gravada e
-            // sempre a da particula que realmente aparece naquele pixel.
-            ColorMask R 0
-            ColorMask R 1
+            // R = profundidade, B = substancia vencedora. G fica para a espessura, que
+            // o passe seguinte acumula. Um alvo so, sem MRT: a substancia precisa viajar
+            // pelo blur junto da profundidade, senao a borda espalhada pelo filtro fica
+            // com o valor de limpeza e e pintada com a aparencia do liquido 0.
+            ColorMask RB
             ZWrite On
             ZTest [_FluidZTest]
             Cull Off
@@ -32,7 +32,6 @@
             StructuredBuffer<float4> _Positions;   // xyz = posicao mundo
             StructuredBuffer<uint> _SubstanceIds;
             float    _Scale;                       // diametro (2*raio)
-            float    _SubstanceEncode;             // 1/255: id -> canal de 8 bits
 
             // Slot morto carrega este id. Ver FluidPool.
             static const uint DEAD_SUBSTANCE = 0xFFFFFFFF;
@@ -83,14 +82,13 @@
                     : TransformWViewToHClip(vertexVS);
                 o.sphereCoord = corner;
                 o.centerVS = centerVS;
-                o.substance = (float)substance * _SubstanceEncode;
+                o.substance = (float)substance;
                 return o;
             }
 
             struct FragmentOutput
             {
-                float eye : SV_Target0;
-                float substance : SV_Target1;
+                float4 eye : SV_Target0;
                 float depth : SV_Depth;
             };
 
@@ -107,8 +105,7 @@
                 clip(eyeDepth - 1e-5);
 
                 FragmentOutput output;
-                output.eye = eyeDepth;
-                output.substance = IN.substance;
+                output.eye = float4(eyeDepth, 0.0, IN.substance, 0.0);
                 float4 surfaceHCS = TransformWViewToHClip(surfaceVS);
                 output.depth = surfaceHCS.z / surfaceHCS.w;
                 return output;

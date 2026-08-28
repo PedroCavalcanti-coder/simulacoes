@@ -33,8 +33,9 @@ namespace LabSpill
         }
 
         [Header("Superficie embaçada")]
-        [Tooltip("Escala dos buffers SSF. 0.66 evita meia-resolucao serrilhada sem o custo de full HD.")]
-        [Range(0.5f, 1f)] public float resolutionScale = 0.66f;
+        [Tooltip("Escala dos buffers SSF. Subiu para 0.75 depois que os pipelines por " +
+            "liquido viraram um so: parte do custo economizado foi gasta em borda.")]
+        [Range(0.5f, 1f)] public float resolutionScale = 0.75f;
         [Range(0.25f, 4f)] public float blurRadius = 3.2f;
         [Range(1, 3)] public int blurIterations = 1;
         [Range(0.1f, 1.5f)] public float normalRadius = 1.5f;
@@ -55,8 +56,9 @@ namespace LabSpill
         [Min(0.1f)] public float massScale = 1f;
         [Min(0f)] public float restDamping = 2f;
         [Tooltip("Coesao entre vizinhos, em m/s2. E o que faz o jato sair como filete " +
-            "continuo em vez de esferas soltas. 0 desliga.")]
-        [Range(0f, 4f)] public float cohesion = 0.4f;
+            "continuo em vez de esferas soltas. Compare com a gravidade, 9.81: abaixo " +
+            "de 1 o efeito nao aparece. 0 desliga.")]
+        [Range(0f, 8f)] public float cohesion = 2f;
 
         [Header("Emissao e descarte")]
         [Range(1, 256)] public int maxParticlesPerFrame = 32;

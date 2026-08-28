@@ -154,10 +154,12 @@ namespace LabSpill.Rendering
                    SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Blend);
         }
 
+        // Quatro canais, nao dois: R profundidade, G espessura, B substancia. A
+        // substancia precisa atravessar o blur junto da profundidade - num alvo
+        // separado, a borda que o filtro espalha ficaria com o valor de limpeza e
+        // seria pintada com a aparencia do liquido 0.
         static GraphicsFormat ChooseEyeThicknessFormat()
         {
-            if (SupportsEyeThicknessFormat(GraphicsFormat.R32G32_SFloat))
-                return GraphicsFormat.R32G32_SFloat;
             if (SupportsEyeThicknessFormat(GraphicsFormat.R32G32B32A32_SFloat))
                 return GraphicsFormat.R32G32B32A32_SFloat;
             return GraphicsFormat.None;
@@ -339,7 +341,6 @@ namespace LabSpill.Rendering
             public static readonly int NormalRadius = Shader.PropertyToID("_PBDFluidNormalRadius");
             public static readonly int Positions = Shader.PropertyToID("_Positions");
             public static readonly int SubstanceIds = Shader.PropertyToID("_SubstanceIds");
-            public static readonly int SubstanceEncode = Shader.PropertyToID("_SubstanceEncode");
             public static readonly int SurfaceSubstance =
                 Shader.PropertyToID("_PBDFluidSurfaceSubstance");
             public static readonly int Scale = Shader.PropertyToID("_Scale");
@@ -464,14 +465,6 @@ namespace LabSpill.Rendering
                     clearBuffer = true
                 });
 
-                var substanceImport = new ImportResourceParams
-                {
-                    clearOnFirstUse = true,
-                    clearColor = Color.clear,
-                    discardOnLastUse = false
-                };
-                TextureHandle substanceTarget =
-                    renderGraph.ImportTexture(targets.substance, substanceImport);
 
                 using (var builder = renderGraph.AddRasterRenderPass<DepthData>(
                     "PBD SSF Depth " + suffix, out var passData))
@@ -483,7 +476,6 @@ namespace LabSpill.Rendering
                     passData.substanceIds = entry.SubstanceIds;
                     passData.scale = entry.Radius * 2f * m_owner.EffectiveParticleScale;
                     builder.SetRenderAttachment(eye, 0, AccessFlags.WriteAll);
-                    builder.SetRenderAttachment(substanceTarget, 1, AccessFlags.WriteAll);
                     builder.SetRenderAttachmentDepth(privateDepth, AccessFlags.WriteAll);
                     builder.SetRenderFunc((DepthData data, RasterGraphContext context) =>
                     {
@@ -492,7 +484,6 @@ namespace LabSpill.Rendering
                         data.mat.SetBuffer(ShaderIDs.Positions, data.positions);
                         if (data.substanceIds != null)
                             data.mat.SetBuffer(ShaderIDs.SubstanceIds, data.substanceIds);
-                        data.mat.SetFloat(ShaderIDs.SubstanceEncode, 1f / 255f);
                         data.mat.SetFloat(ShaderIDs.Scale, data.scale);
                         context.cmd.DrawMeshInstancedIndirect(data.mesh, 0, data.mat, 0, data.args);
                     });
@@ -567,6 +558,8 @@ namespace LabSpill.Rendering
                 };
                 TextureHandle surfaceDepth = renderGraph.ImportTexture(targets.depth, importParams);
                 TextureHandle surfaceNormal = renderGraph.ImportTexture(targets.normal, importParams);
+                TextureHandle surfaceSubstance =
+                    renderGraph.ImportTexture(targets.substance, importParams);
                 using (var builder = renderGraph.AddRasterRenderPass<NormalData>(
                     "PBD SSF Normal Reconstruct " + suffix, out var passData))
                 {
@@ -584,6 +577,7 @@ namespace LabSpill.Rendering
                     passData.orthographic = orthographic;
                     builder.SetRenderAttachment(surfaceDepth, 0, AccessFlags.WriteAll);
                     builder.SetRenderAttachment(surfaceNormal, 1, AccessFlags.WriteAll);
+                    builder.SetRenderAttachment(surfaceSubstance, 2, AccessFlags.WriteAll);
                     builder.UseTexture(smoothedEye, AccessFlags.Read);
                     if (passData.hasSceneDepth) builder.UseTexture(passData.sceneDepth, AccessFlags.Read);
                     builder.AllowGlobalStateModification(true);

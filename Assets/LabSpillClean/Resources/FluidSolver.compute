@@ -463,8 +463,8 @@ void UpdateVelocities(int id : SV_DispatchThreadID)
 float CohesionSpline01(float r)
 {
 	// Saida unica, inicializada. Com um return dentro do if, o compilador nao prova
-	// que todo caminho atribui o retorno e avisa "potentially uninitialized" - que em
-	// Vulkan nao e' so ruido de console: o valor pode sair lixo em algum driver.
+	// que todo caminho atribui o retorno e avisa "potentially uninitialized" - que nao
+	// e' so ruido de console: o valor pode sair lixo dependendo do driver.
 	float result = 0.0;
 	float h = KernelRadius;
 

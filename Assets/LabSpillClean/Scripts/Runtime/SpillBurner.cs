@@ -46,6 +46,12 @@ namespace LabSpill
         readonly List<KeyValuePair<SpillFlaskVolume, float>> m_flaskScratch =
             new List<KeyValuePair<SpillFlaskVolume, float>>();
 
+        // Vapor externo do frasco novo. As bolhas ja sao nativas do LVP (dentro do
+        // vidro); o vapor acima da boca continua sendo nosso, porque nao ha
+        // equivalente nativo para "algo saindo do gargalo".
+        readonly Dictionary<SpillFlaskVolume, ParticleSystem> m_flaskSteam =
+            new Dictionary<SpillFlaskVolume, ParticleSystem>();
+
         Material m_bubbleMaterial;
         Material m_steamMaterial;
 
@@ -188,6 +194,11 @@ namespace LabSpill
                 if (flask == null)
                 {
                     m_flaskTemperature.Remove(flask);
+                    if (m_flaskSteam.TryGetValue(flask, out ParticleSystem orphanSteam))
+                    {
+                        if (orphanSteam != null) Destroy(orphanSteam.gameObject);
+                        m_flaskSteam.Remove(flask);
+                    }
                     continue;
                 }
 
@@ -207,7 +218,38 @@ namespace LabSpill
                         Mathf.InverseLerp(boilingPoint, maximumTemperatureC, temperature));
 
                 flask.SetBoiling(intensity);
+
+                float steamStart = top != null ? top.SteamStartIntensity : 0.65f;
+                float steamIntensity = Mathf.InverseLerp(steamStart, 1f, intensity);
+                UpdateFlaskSteam(flask, top, steamIntensity);
             }
+        }
+
+        /// <summary>
+        /// Vapor do frasco novo, acima da boca. So existe enquanto a fervura passar do
+        /// limiar do proprio liquido - abaixo disso o sistema fica parado e em cache,
+        /// nao destruido, para nao pagar o custo de criar de novo no proximo fervor.
+        /// </summary>
+        void UpdateFlaskSteam(SpillFlaskVolume flask, SpillLiquidDefinition top, float steamIntensity)
+        {
+            if (steamIntensity <= 0f)
+            {
+                if (m_flaskSteam.TryGetValue(flask, out ParticleSystem idle) &&
+                    idle != null && idle.isEmitting)
+                    idle.Stop(false, ParticleSystemStopBehavior.StopEmitting);
+                return;
+            }
+
+            if (!m_flaskSteam.TryGetValue(flask, out ParticleSystem steam) || steam == null)
+            {
+                steam = CreateSteam(flask.transform);
+                m_flaskSteam[flask] = steam;
+            }
+
+            Color vapor = top != null ? top.VaporColor : new Color(0.94f, 0.98f, 1f, 0.18f);
+            float rate = top != null ? top.SteamRateAtMaximum : 5f;
+            float mouthWidth = Mathf.Max(flask.PortRadius * 2f, 0.02f);
+            UpdateSteamCore(steam, steamIntensity, flask.PortCentreWorld, vapor, rate, mouthWidth);
         }
 
         static SpillLiquidContainer ResolveLiquid(Collider collider)
@@ -255,7 +297,7 @@ namespace LabSpill
             effects = new ThermalEffects
             {
                 bubbles = CreateBubbles(liquid),
-                steam = CreateSteam(liquid),
+                steam = CreateSteam(liquid.transform),
                 bubbleBuffer = new ParticleSystem.Particle[Mathf.Max(
                     8, liquid.Config != null ? liquid.Config.bubbleMaxParticles : 100)]
             };
@@ -265,7 +307,7 @@ namespace LabSpill
 
         ParticleSystem CreateBubbles(SpillLiquidContainer liquid)
         {
-            ParticleSystem particles = CreateParticleSystem("Boiling Bubbles", liquid);
+            ParticleSystem particles = CreateParticleSystem("Boiling Bubbles", liquid.transform);
             LiquidConfig config = liquid.Config;
             var main = particles.main;
             main.maxParticles = config != null ? config.bubbleMaxParticles : 100;
@@ -297,9 +339,9 @@ namespace LabSpill
             return particles;
         }
 
-        ParticleSystem CreateSteam(SpillLiquidContainer liquid)
+        ParticleSystem CreateSteam(Transform host)
         {
-            ParticleSystem particles = CreateParticleSystem("Boiling Steam", liquid);
+            ParticleSystem particles = CreateParticleSystem("Boiling Steam", host);
             var main = particles.main;
             main.maxParticles = 70;
             main.loop = true;
@@ -359,13 +401,17 @@ namespace LabSpill
             return particles;
         }
 
-        static ParticleSystem CreateParticleSystem(string effectName,
-            SpillLiquidContainer liquid)
+        static ParticleSystem CreateParticleSystem(string effectName, Transform host)
         {
             GameObject effectObject = new GameObject(effectName) { hideFlags = HideFlags.DontSave };
-            Transform flask = liquid.transform.parent != null ? liquid.transform.parent : liquid.transform;
-            effectObject.transform.SetParent(flask, false);
-            Vector3 scale = flask.lossyScale;
+            // O pai do host, nao o host: no frasco antigo o liquido e' um filho do
+            // frasco, e ancorar no pai mantem o efeito estavel mesmo que o filho do
+            // liquido tenha escala/pivo esquisitos. No frasco novo o host ja e' o
+            // proprio frasco (LiquidVolume mora no mesmo objeto que tinha o container),
+            // entao cai no mesmo lugar de qualquer forma.
+            Transform parent = host.parent != null ? host.parent : host;
+            effectObject.transform.SetParent(parent, false);
+            Vector3 scale = parent.lossyScale;
             effectObject.transform.localScale = new Vector3(
                 1f / Mathf.Max(Mathf.Abs(scale.x), 1e-4f),
                 1f / Mathf.Max(Mathf.Abs(scale.y), 1e-4f),
@@ -526,28 +572,44 @@ namespace LabSpill
             }
 
             Renderer liquidRenderer = liquid.GetComponent<Renderer>();
+            Vector3 position;
             if (liquid.TryGetOpening(out Vector3 center, out _, out _))
-                particles.transform.position = center;
+                position = center;
             else if (liquidRenderer != null)
-                particles.transform.position = new Vector3(
+                position = new Vector3(
                     liquidRenderer.bounds.center.x,
                     liquidRenderer.bounds.max.y,
                     liquidRenderer.bounds.center.z);
+            else
+                position = liquid.transform.position;
 
-            Color vapor = liquid.VaporColor;
-            vapor.a = Mathf.Lerp(0.04f, Mathf.Max(0.08f, vapor.a), intensity);
-            var main = particles.main;
-            main.startColor = vapor;
             float flaskWidth = liquidRenderer != null
                 ? Mathf.Min(liquidRenderer.bounds.size.x, liquidRenderer.bounds.size.z)
                 : 0.1f;
+            float rate = liquid.Config != null ? liquid.Config.steamRateAtMaximum : 5f;
+            UpdateSteamCore(particles, intensity, position, liquid.VaporColor, rate, flaskWidth);
+        }
+
+        /// <summary>
+        /// Forma do vapor, comum aos dois frascos. Recebe ja resolvidos os unicos
+        /// quatro numeros que diferem entre o container antigo e o SpillFlaskVolume:
+        /// onde o vapor nasce, a cor, a taxa maxima e uma largura para escalar
+        /// tamanho/raio do emissor.
+        /// </summary>
+        static void UpdateSteamCore(ParticleSystem particles, float intensity,
+            Vector3 position, Color vaporColor, float rateAtMaximum, float flaskWidth)
+        {
+            particles.transform.position = position;
+
+            Color vapor = vaporColor;
+            vapor.a = Mathf.Lerp(0.04f, Mathf.Max(0.08f, vapor.a), intensity);
+            var main = particles.main;
+            main.startColor = vapor;
             main.startSize = new ParticleSystem.MinMaxCurve(flaskWidth * 0.18f, flaskWidth * 0.36f);
             var shape = particles.shape;
             shape.radius = flaskWidth * 0.11f;
             var emission = particles.emission;
-            emission.rateOverTime = (liquid.Config != null
-                ? liquid.Config.steamRateAtMaximum
-                : 5f) * intensity;
+            emission.rateOverTime = rateAtMaximum * intensity;
             if (!particles.isPlaying) particles.Play();
         }
 
@@ -565,6 +627,12 @@ namespace LabSpill
             foreach (SpillLiquidContainer liquid in m_known)
                 if (liquid != null) liquid.SetBoilingIntensity(0f);
             foreach (ThermalEffects effects in m_effects.Values) StopEffects(effects);
+
+            foreach (var pair in m_flaskTemperature)
+                if (pair.Key != null) pair.Key.SetBoiling(0f);
+            foreach (ParticleSystem steam in m_flaskSteam.Values)
+                if (steam != null && steam.isEmitting)
+                    steam.Stop(false, ParticleSystemStopBehavior.StopEmitting);
         }
 
         void OnDestroy()
@@ -576,6 +644,9 @@ namespace LabSpill
             }
             if (m_bubbleMaterial != null) Destroy(m_bubbleMaterial);
             if (m_steamMaterial != null) Destroy(m_steamMaterial);
+
+            foreach (ParticleSystem steam in m_flaskSteam.Values)
+                if (steam != null) Destroy(steam.gameObject);
         }
     }
 }

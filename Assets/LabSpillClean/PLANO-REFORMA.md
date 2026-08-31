@@ -297,7 +297,13 @@ Fase 4**, porque o `LiquidConfig` ainda os lê em runtime.
 
 Esta fase é **[C] inteira**. Não delegar nada aqui.
 
-### 3.1 [C] Pool de capacidade fixa
+**Status: fechada por completo** (3.1–3.7). Executada em vários commits — pool de capacidade
+fixa, spawn/morte na GPU, colisão universal, coesão de Akinci, emissão determinística e
+captura no frasco — todos rodando na cena hoje. Ver commits
+`perf: rewrite the particle core on a fixed-capacity pool` e os fixes que se seguiram
+(marca d'agua do draw, id de substância pelo blur, cull no vértice).
+
+### 3.1 [C] Pool de capacidade fixa ✅
 
 Reescrever `FluidBody` como pool. Contrato novo:
 
@@ -327,7 +333,7 @@ Regras invioláveis:
 Apagar: `Append`, `CompactDead`, `ParticleSource`, `ParticlesFromList`, `CBUtility`
 (este só serve aos `Release` que somem junto).
 
-### 3.2 [C] Nascimento e morte sem realloc
+### 3.2 [C] Nascimento e morte sem realloc ✅
 
 **Free-list no CPU:** `Stack<int> m_freeSlots`, preenchido com `0..Capacity-1` no início.
 
@@ -352,7 +358,7 @@ devolve os índices ao `m_freeSlots` e decrementa `AliveCount`. Um frame de lat�
 
 Isso implementa "some depois de um tempo", em qualquer lugar, sem `IsOnBench` e sem kill collider.
 
-### 3.3 [C] Colidir com tudo
+### 3.3 [C] Colidir com tudo ✅
 
 Novo `Scripts/Runtime/SpillColliderProvider.cs`:
 
@@ -374,7 +380,7 @@ tem de ser capturada pelo porto (3.5), e uma casca de vidro aproximada por OBB f
 Gota que erra o frasco simplesmente passa ao lado e cai na bancada — que é um colisor real.
 Se depois quiser respingo no vidro externo, é `SpillMeshColliderBoxes` no frasco, não código novo.
 
-### 3.4 [C] Qualidade do jato
+### 3.4 [C] Qualidade do jato ✅
 
 Com o custo de emissão eliminado, o orçamento vai para a simulação:
 
@@ -394,26 +400,28 @@ Com o custo de emissão eliminado, o orçamento vai para a simulação:
 5. **Substepping**: `maxPhysicsStepsPerFrame` passa a ser calculado do CFL real
    (`ceil(velMax·dt / (0.4·raio))`), com teto configurável.
 
-### 3.5 [M] Captura no frasco receptor
+### 3.5 [M] Captura no frasco receptor ✅
 
-Substituir `TryFindReceiver` ([SpillFluidWorld.cs:436](Scripts/Runtime/SpillFluidWorld.cs:436)),
-que hoje varre `SpillLiquidContainer[]`, por consulta ao `SpillContainerRegistry`:
+**Implementado diferente do que este texto previa**, e de propósito. `SpillContainerRegistry` /
+`ISpillLiquidContainer` foram copiados do LiquidFX na Fase 2.0 e continuam existindo —
+`SpillFlaskVolume` ainda implementa a interface e se registra — mas a captura de partículas
+**não passa por eles**. `FindReceiverUnder` resolve "que recipiente está sob este ponto", um
+problema de fluxo (jato do LiquidFX seguindo um stream); a captura de PBD precisa de raio,
+profundidade de captura e teste de travessia de segmento, que a interface não expõe. Em vez
+disso, `SpillFluidWorld` tem um `struct Receiver` interno que embrulha `SpillFlaskVolume` OU
+`SpillLiquidContainer` (o andaime de convivência da Fase 4), com porto resolvido por
+`TryGetPort`, e a captura roda **dentro do proprio compute shader**
+(`FluidSolver.compute:EntersPort`), não mais como varredura da CPU a cada 0,1 s.
 
-```csharp
-ISpillLiquidContainer receiver = SpillContainerRegistry.FindReceiverUnder(particlePos, fromY);
-```
+Preservado do texto original: o teste de travessia de segmento (a comparação
+axial anterior/atual dentro de `EntersPort`) e a folga do raio visual do SSF
+(`visualRadiusScale`) somada ao raio do porto em `SpillFluidWorld.UploadPorts`.
 
-**Preservar** duas coisas boas do código atual, que o registro não tem:
-- o teste de **travessia de segmento** (posição anterior → atual cruzando o disco da boca),
-  porque com readback assíncrono a amostragem é ainda mais esparsa que os 0,1 s de hoje;
-- a folga do raio visual do SSF (`visualRadiusScale`), para a gota que *parece* ter entrado.
+Ao capturar: `receiver.flask.AddLayeredML(...)` ou `receiver.legacy.ReceiveLiquid(...)`,
+dependendo de qual dos dois o `Receiver` embrulha, e o slot é liberado pela leitura
+assíncrona de mortes (`SpillFluidWorld.ReleaseParticle`).
 
-Implementar como método novo no `SpillFluidWorld` que usa `SpillFlaskVolume.PortCentreWorld` /
-`PortRadius` em vez do `TryGetOpening` do baker.
-
-Ao capturar: `flask.AddLayeredML(mlPorPartícula, definiçãoDaSubstância)` e liberar o slot.
-
-### 3.6 [S] Sanear `SpillVisualSettings`
+### 3.6 [S] Sanear `SpillVisualSettings` ✅
 
 Depois de 3.1–3.5:
 - **remover**: `benchLifetimeMin`, `benchLifetimeMax`;
@@ -421,7 +429,7 @@ Depois de 3.1–3.5:
   `colliderRefreshInterval`, `maxColliders`;
 - **atualizar tooltips** que citam bancada/chão.
 
-### 3.7 [M] Critérios de aceite da Fase 3
+### 3.7 [M] Critérios de aceite da Fase 3 ✅
 
 Medir com o Profiler, cena `LabSpillDemo`, derramando 250 mL:
 1. `SpillFluidWorld.Update` **sem picos** de GPU readback (hoje há um a cada 25 ms).
@@ -442,8 +450,9 @@ consegue fazer: executar nessa ordem entregaria sete frascos quebrados para cons
 O caminho novo passou a ser construido **ao lado** do antigo, com os dois convivendo ate o
 ultimo frasco ser migrado. A 4.3 vira a ultima tarefa da fase, nao a terceira.
 
-**Status: 4.1 fechada, com o andaime de convivencia.** Falta 4.2 (fogareiro), a migracao da
-cena frasco a frasco, e so entao 4.3.
+**Status: 4.0, 4.1, 4.2 e 4.4 fechadas.** Falta só a migração da cena frasco a frasco (5.1,
+trabalho de Editor que esta sessão não tem como fazer sem MCP — ver seção 5.1) e, só depois
+dela validada, a 4.3 (apagar o sistema antigo).
 
 ### 4.0 [C] ✅ Andaime de convivencia
 
@@ -484,7 +493,7 @@ Notas:
 - Velocidade de saída: `sqrt(2·g·head)·0.6` (fórmula atual, funciona) + velocidade do
   `Rigidbody` no ponto de derrame.
 
-### 4.2 [M] Migrar `SpillBurner` para LVP
+### 4.2 [M] ✅ Migrar `SpillBurner` para LVP
 
 Trocar o alvo `SpillLiquidContainer` por `SpillFlaskVolume`. Mapeamento:
 
@@ -512,6 +521,18 @@ lv.requireBubblesUpdate = true;
 Isso apaga `ConstrainBubbles`, `UpdateBubbles` e o `SpillBubbleParticle.shader`
 — ~150 linhas e um ParticleSystem por frasco. `UpdateSteam` fica.
 
+**Implementado.** `SpillBurner.UpdateFlasks` mantém a temperatura por frasco (num
+`Dictionary<SpillFlaskVolume, float>`, não no frasco — calor é assunto de quem tem fogo) e
+chama `flask.SetBoiling(intensity01)`, que escreve `bubblesAmount`/`bubblesVerticalSpeed`/
+`turbulence1` no `LiquidVolume` com histerese e quantização (ver `SpillFlaskVolume.
+ApplyAgitation` — `bubblesAmount` dispara `requireBubblesUpdate`, que clona e reconstrói uma
+textura 3D; sem quantizar, uma intensidade variando continuamente reconstruiria essa textura
+todo frame). Vapor externo, que o plano original deixava só para o container antigo, foi
+adicionado depois como `UpdateFlaskSteam` — `ParticleSystem` por frasco, acima de
+`PortCentreWorld`, cor/taxa de `SpillLiquidDefinition.VaporColor`/`SteamRateAtMaximum`. A
+lógica de forma (`UpdateSteamCore`) é compartilhada com o caminho antigo; só a origem, cor e
+taxa mudam entre os dois.
+
 ### 4.3 [C] Apagar o sistema de frasco antigo — **ULTIMA tarefa da fase**
 
 Só depois de 4.1, 4.2 **e da cena inteira migrada e validada**. Apagar (+ `.meta`):
@@ -532,7 +553,7 @@ Em `SpillFluidWorld`, a classe interna `Liquid` passa a guardar `LiquidDefinitio
 `LiquidConfig`, e `ApplyConfig(Material, LiquidConfig)` vira `ApplyDefinition(Material, LiquidDefinition)`
 — **o material SSF do jato continua sendo `PBDFluidSSFSurface`**, não muda.
 
-### 4.4 [M] Registrar o depth prepass do LVP
+### 4.4 [M] ✅ Registrar o depth prepass do LVP
 
 `Assets/LabSpillClean/Settings/PC_Renderer.asset` tem hoje **uma** feature (o SSF). O LVP precisa
 de `LiquidVolumeDepthPrePassRenderFeature` quando `depthAwareCustomPass` estiver ligado.
@@ -541,28 +562,53 @@ Adicionar a feature **depois** do SSF na lista e validar a ordem visualmente: o 
 ficar corretamente ocluído pelo vidro e pelo líquido do frasco. Se houver briga de profundidade,
 o ajuste é `doubleSidedBias` / `backDepthBias` no `LiquidVolume`, não código.
 
+**Feito**, mas na ordem contrária: a feature entrou **antes** do SSF, porque o prepass tem de
+já ter rodado quando o passe de profundidade do jato desenha — o inverso do que este texto
+dizia. Confirmado funcionando: ao abrir o projeto, o próprio `Create()` do Unity resolveu
+`Shader.Find("LiquidVolume/DepthPrePass")` e persistiu o GUID no `.asset` (visível no commit
+`00889c0` do usuário, puro re-save do editor). Sem essa feature, todo `LiquidVolume` com
+`topology = Irregular` desenha lixo — foi a causa do primeiro bug visual reportado (cacos
+triangulares laranja), embora naquele caso específico o frasco nem tivesse sido migrado ainda;
+o bug real daquela captura era o shader antigo, não isto.
+
 ---
 
 ## Fase 5 — Cena e validação
 
-### 5.1 [M] Reconstruir os frascos da cena
+**Status: bloqueada em 5.1.** É a única peça que falta para fechar Fases 4 e 5 inteiras, e é
+trabalho que só existe dentro do Editor — nada que dê para terminar por edição de arquivo.
 
-Para cada um de `Frasco - Agua`, `Frasco - Alcool`, `Frasco - Oleo`,
+### 5.1 [M] ⏸ Migrar os frascos da cena — **precisa do Editor aberto (MCP ou o usuário)**
+
+Este texto descrevia originalmente um checklist manual (remover container, adicionar
+`LiquidVolume`, preencher `initialContents` campo a campo). Isso ficou obsoleto na Fase 4.0:
+`SpillFlaskMigrator` (`Tools > Lab Spill > Migrar frascos selecionados para LVP`) faz tudo isso
+via `SerializedObject`, incluindo achar os `SpillLiquidDefinition` certos pelo nome do
+container antigo. Selecionar os 7 frascos e rodar o comando uma vez resolve os 7.
+
+**Por que esta sessão não faz isso sozinha:** o MCP do Unity não conectou em nenhuma tentativa
+(6 verificações ao longo desta conversa). Diferente das cirurgias de cena feitas até aqui
+(remover um componente, trocar uma referência de GUID, adicionar um script de 2 campos),
+`LiquidVolume` tem dezenas de campos serializados. Escrever esse YAML à mão, sem o compilador
+nem o Unity para validar, é o tipo de mudança onde um campo errado quebra silenciosamente o
+visual — e o próprio Unity já mostrou, no commit `00889c0` do usuário, que ele reprocessa e
+corrige asset YAML no primeiro load real; nada garante que faria o mesmo com um componente
+inteiro montado à mão, e não há screenshot para conferir depois. O comando de menu usa a API
+real do Unity (`Undo.AddComponent` + `SerializedObject`), que garante todo campo correto —
+é o caminho mais seguro por uma margem grande.
+
+**Para migrar:** selecionar `Frasco - Agua`, `Frasco - Alcool`, `Frasco - Oleo`,
 `Camadas - Agua + Oleo`, `Camadas - Alcool + Oleo`, `Mistura - Agua + Alcool`,
-`Mistura e Camadas - Agua + Alcool + Oleo`:
+`Mistura e Camadas - Agua + Alcool + Oleo` (pode ser todos de uma vez, o comando aceita
+seleção múltipla) e rodar `Tools > Lab Spill > Migrar frascos selecionados para LVP`.
 
-1. Remover `SpillLiquidContainer` e o GameObject filho de líquido.
-2. Adicionar `LiquidVolume` ao objeto do vidro. `detail = MultipleNoFlask`
-   (SPEC §2.7: os prefabs do projeto usam `DefaultNoFlask`; preservar o sufixo `NoFlask`).
-3. Conferir a mesh: LVP quer pivô centrado e mesh fechada — usar `CenterPivot()` e
-   `autoCloseMesh` do próprio inspector do LVP se o `flask.fbx` estiver aberto no gargalo.
-4. Adicionar `SpillFlaskVolume`: `capacityML = 250`, preencher `initialContents` com os
-   `LiquidDefinition` da Fase 2 e as mesmas mL de hoje, ajustar `portRadius` ao gargalo real.
-5. Adicionar `SpillColliderExclude` (Fase 3.3).
-6. `SpillPourEmitter` continua no pai, agora apontando para o `SpillFlaskVolume`.
-
-Os nomes das configurações de teste da cena (mistura vs camadas) já descrevem o resultado
-esperado; usar como checklist visual.
+Depois de migrar, conferir por frasco (a ferramenta não valida isto sozinha):
+- a malha: LVP quer pivô centrado e mesh fechada — `CenterPivot()` / `autoCloseMesh` no
+  próprio inspector do `LiquidVolume` se o `flask.fbx` estiver aberto no gargalo;
+- `portRadius` do `SpillFlaskVolume`: o migrador não sabe o gargalo real de cada frasco,
+  fica no default (4,5 cm) — ajustar se a partícula não for capturada;
+- os nomes das configurações de teste (mistura vs camadas) já descrevem o resultado esperado —
+  usar como checklist visual.
 
 ### 5.2 [S] Construtor de cena novo
 

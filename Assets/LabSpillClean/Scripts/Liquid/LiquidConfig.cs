@@ -1,12 +1,13 @@
-using System;
+﻿using System;
 using UnityEngine;
 
 namespace LabLiquidVR
 {
     /// <summary>
     /// Configuracao compartilhada pelo corpo, pela superficie e pelos efeitos
-    /// termicos de um liquido. O JSON pode ser trocado por recipiente sem que
-    /// o Fogareiro ou o shader precisem conhecer valores duplicados.
+    /// termicos de um liquido. O asset (<see cref="LiquidConfigAsset"/>) pode ser
+    /// trocado por recipiente sem que o Fogareiro ou o shader precisem conhecer
+    /// valores duplicados.
     /// </summary>
     [Serializable]
     public sealed class LiquidConfig
@@ -74,21 +75,18 @@ namespace LabLiquidVR
         [Min(0f)] public float steamRateAtMaximum = 5f;
         [Range(0f, 1f)] public float steamStartIntensity = 0.65f;
 
-        public static LiquidConfig Load(TextAsset source)
+        /// <summary>
+        /// Copia os valores do asset (ou os defaults desta classe, se o asset estiver
+        /// vazio) para uma instancia nova e independente. Uma copia, e nao a referencia
+        /// direta a <c>source.data</c>: o valor devolvido pode acabar dentro de uma
+        /// mistura (<see cref="LiquidConfig.Mix"/>) que muda com o tempo, e isso nunca
+        /// pode voltar a escrever no asset compartilhado entre frascos.
+        /// </summary>
+        public static LiquidConfig Load(LiquidConfigAsset source)
         {
-            TextAsset json = source != null ? source : Resources.Load<TextAsset>("DefaultLiquidConfig");
-            LiquidConfig config = new LiquidConfig();
-            if (json != null && !string.IsNullOrWhiteSpace(json.text))
-            {
-                try
-                {
-                    JsonUtility.FromJsonOverwrite(json.text, config);
-                }
-                catch (Exception exception)
-                {
-                    Debug.LogWarning($"[LiquidConfig] JSON invalido em '{json.name}': {exception.Message}");
-                }
-            }
+            LiquidConfig config = source != null && source.data != null
+                ? Copy(source.data)
+                : new LiquidConfig();
             config.Sanitize();
             return config;
         }

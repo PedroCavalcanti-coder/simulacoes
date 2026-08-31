@@ -154,12 +154,12 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  - configFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
     milliliters: 60
-  - configFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  - configFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
     milliliters: 60
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -631,12 +631,12 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  - configFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
     milliliters: 60
-  - configFile: {fileID: 4900000, guid: 2bb18b49f5d7016469015f858168aa3c, type: 3}
+  - configFile: {fileID: 11400000, guid: a5c6f8388f404bf2a2a32ab3c03f360d, type: 2}
     milliliters: 60
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -939,14 +939,14 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 150
-  liquidConfigFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  - configFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
     milliliters: 50
-  - configFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  - configFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
     milliliters: 50
-  - configFile: {fileID: 4900000, guid: 2bb18b49f5d7016469015f858168aa3c, type: 3}
+  - configFile: {fileID: 11400000, guid: a5c6f8388f404bf2a2a32ab3c03f360d, type: 2}
     milliliters: 50
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -1071,10 +1071,10 @@ MonoBehaviour:
   voxelResolution: 15
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: a42b946d1976c7f4b9b241d7b9c6c86c, type: 3}
+  - configFile: {fileID: 11400000, guid: 8fe5491aaed441dbb59a681a851b387a, type: 2}
     milliliters: 120
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -2559,10 +2559,10 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  - configFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
     milliliters: 120
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -2844,10 +2844,10 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: 2bb18b49f5d7016469015f858168aa3c, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: a5c6f8388f404bf2a2a32ab3c03f360d, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: 2bb18b49f5d7016469015f858168aa3c, type: 3}
+  - configFile: {fileID: 11400000, guid: a5c6f8388f404bf2a2a32ab3c03f360d, type: 2}
     milliliters: 120
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -3044,7 +3044,7 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 0
-  liquidConfigFile: {fileID: 4900000, guid: e7c0508a3a1369b48b32ffef85446219, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 7d4cad52bafb4e23aae8048a4219354d, type: 2}
   densitySeparationSeconds: 4
   initialComposition: []
   currentTemperatureC: 22
@@ -8926,12 +8926,12 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 120
-  liquidConfigFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
   densitySeparationSeconds: 4
   initialComposition:
-  - configFile: {fileID: 4900000, guid: e31579dd924faa5409e0195141453e2e, type: 3}
+  - configFile: {fileID: 11400000, guid: 343938bb1d854bc18833727d237c8f13, type: 2}
     milliliters: 60
-  - configFile: {fileID: 4900000, guid: 2bb18b49f5d7016469015f858168aa3c, type: 3}
+  - configFile: {fileID: 11400000, guid: a5c6f8388f404bf2a2a32ab3c03f360d, type: 2}
     milliliters: 60
   currentTemperatureC: 22
   useGraduationCalibration: 1
@@ -10974,7 +10974,7 @@ MonoBehaviour:
   voxelResolution: 50
   capacityML: 250
   currentVolumeML: 125
-  liquidConfigFile: {fileID: 4900000, guid: e7c0508a3a1369b48b32ffef85446219, type: 3}
+  liquidConfigFile: {fileID: 11400000, guid: 7d4cad52bafb4e23aae8048a4219354d, type: 2}
   densitySeparationSeconds: 4
   initialComposition: []
   currentTemperatureC: 22

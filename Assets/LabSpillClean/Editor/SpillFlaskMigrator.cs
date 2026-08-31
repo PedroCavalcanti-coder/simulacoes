@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using LabLiquidVR;
 using LiquidVolumeFX;
 using UnityEditor;
@@ -140,7 +140,7 @@ namespace LabSpill.EditorTools
         /// Acha o asset de liquido que veio do JSON. O conversor nomeia pelo arquivo:
         /// WaterLiquidConfig.json vira Liq_Water.asset.
         /// </summary>
-        static SpillLiquidDefinition FindDefinition(TextAsset config)
+        static SpillLiquidDefinition FindDefinition(LiquidConfigAsset config)
         {
             string stem = config != null
                 ? config.name.Replace("LiquidConfig", string.Empty)

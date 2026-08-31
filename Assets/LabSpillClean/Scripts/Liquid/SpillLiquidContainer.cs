@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 namespace LabLiquidVR
@@ -19,7 +19,7 @@ namespace LabLiquidVR
     [System.Serializable]
     public struct InitialLiquidPortion
     {
-        public TextAsset configFile;
+        public LiquidConfigAsset configFile;
         [Min(0f)] public float milliliters;
     }
 
@@ -48,8 +48,8 @@ namespace LabLiquidVR
         [Min(0f)]    public float currentVolumeML = 100f;
 
         [Header("Arquivo do liquido")]
-        [Tooltip("JSON compartilhado por corpo, interior, ondas, bolhas e vapor. Vazio usa Resources/DefaultLiquidConfig.json.")]
-        public TextAsset liquidConfigFile;
+        [Tooltip("Asset compartilhado por corpo, interior, ondas, bolhas e vapor. Vazio usa os defaults de LiquidConfig.")]
+        public LiquidConfigAsset liquidConfigFile;
 
         [Header("Mistura e separacao")]
         [Tooltip("Tempo aproximado para fases imisciveis trocarem de posicao.")]
@@ -146,7 +146,7 @@ namespace LabLiquidVR
         LiquidVolumeBaker m_baker;
         LiquidSurfaceMesh m_surfaceMesh;
         LiquidConfig m_config;
-        TextAsset m_loadedConfigFile;
+        LiquidConfigAsset m_loadedConfigFile;
         bool m_configAppliedToMaterial;
         LiquidComposition m_composition;
 
@@ -778,9 +778,9 @@ namespace LabLiquidVR
             UpdateRendererVisibility();
         }
 
-        public void SetLiquidConfig(TextAsset json)
+        public void SetLiquidConfig(LiquidConfigAsset config)
         {
-            liquidConfigFile = json;
+            liquidConfigFile = config;
             m_config = null;
             m_loadedConfigFile = null;
             m_configAppliedToMaterial = false;

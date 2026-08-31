@@ -1,0 +1,63 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 681f675a24bd4da9b56d7444ab676279, type: 3}
+  m_Name: AlcoholLiquidConfig
+  m_EditorClassIdentifier: Assembly-CSharp::LabLiquidVR.LiquidConfigAsset
+  data:
+    liquidName: Alcool
+    category: polar
+    densityKgPerLiter: 0.789
+    viscosity: 1.2
+    boilingPointC: 78.37
+    surfaceColor: {r: 0.96, g: 0.48, b: 1, a: 0.78}
+    bodyColor: {r: 0.58, g: 0.1, b: 0.78, a: 0.54}
+    deepColor: {r: 0.2, g: 0.025, b: 0.38, a: 1}
+    absorptionColor: {r: 0.86, g: 0.4, b: 0.96, a: 1}
+    foamColor: {r: 0.86, g: 0.98, b: 1, a: 0.9}
+    emissionColor: {r: 0.88, g: 0.08, b: 1, a: 1}
+    bubbleColor: {r: 0.78, g: 0.96, b: 1, a: 0.48}
+    vaporColor: {r: 0.94, g: 0.98, b: 1, a: 0.18}
+    absorptionDensity: 1
+    transparency: 0.76
+    lightTransmission: 0.92
+    surfaceOpacity: 0.52
+    turbidity: 0.04
+    smoothness: 0.92
+    indexOfRefraction: 1.361
+    emissionStrength: 0.8
+    maximumWaveHeight: 0.04
+    maximumVerticalWaveHeight: 0.034
+    waveFrequency: 10.5
+    waveIrregularity: 0.68
+    waveDetail: 0.86
+    microWaveAmplitude: 0.0015
+    microWaveSpeed: 0.42
+    surfaceAngularSegments: 128
+    surfaceRadialRings: 16
+    surfaceSkirtDepth: 0.035
+    bubbleMaxParticles: 160
+    bubbleRateAtBoiling: 4
+    bubbleRateAtMaximum: 48
+    bubbleRiseSpeedAtBoiling: 0.055
+    bubbleRiseSpeedAtMaximum: 0.14
+    bubbleMinSizeAtBoiling: 0.012
+    bubbleMaxSizeAtBoiling: 0.027
+    bubbleMinSizeAtMaximum: 0.028
+    bubbleMaxSizeAtMaximum: 0.075
+    bubbleInstabilityAtBoiling: 0.008
+    bubbleInstabilityAtMaximum: 0.11
+    bubbleEmitterRadius: 0.09
+    bubbleBottomOffset: 0.045
+    bubbleWallInset: 0.88
+    bubbleCollisionBounciness: 0.18
+    steamRateAtMaximum: 5
+    steamStartIntensity: 0.65
